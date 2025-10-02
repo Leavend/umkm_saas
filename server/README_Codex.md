@@ -1,13 +1,3 @@
-Siap! Ini **SUPER-PROMPT** sekali tempel untuk Codex (paste di root repo `server/`, mis. di `README_Codex.md`). Tujuannya: **menyelesaikan seluruh backend** sesuai visimu — **Go sebagai wrapper**, DDD + Clean Code, **inline SQL + CTE**, **tanpa FK**, **properties JSONB**, **linter SQL-UUID (build blocker)**, semua **endpoint fitur** aktif, worker, migrator, logging, i18n, kuota, dan siap dipakai Nuxt.
-
-> Cara pakai: buka proyek di VS Code, buka file ini, panggil Codex, lalu biarkan Codex menjalankan perubahan bertahap (commit per tahap).
-
----
-
-# PROMPT untuk Codex — Selesaikan Backend SaaS “Food Photography Naik Kelas Pake AI” (Go Wrapper + Inline SQL)
-
-## Peran & Prinsip
-
 Kamu **Principal Backend Engineer**. Selesaikan proyek ini sampai **siap produksi** dengan prinsip berikut:
 
 1. **Go hanya wrapper**: transport (HTTP), validasi, auth, logging, CORS, i18n, kuota. **Logic bisnis & agregasi data terutama di DB** via **inline SQL/CTE** dan fungsi SQL bila perlu.
