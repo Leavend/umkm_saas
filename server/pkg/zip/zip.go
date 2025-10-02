@@ -3,7 +3,6 @@ package zip
 import (
 	"archive/zip"
 	"bytes"
-	"fmt"
 	"io"
 )
 
@@ -22,7 +21,7 @@ func ArchiveAssets(assets []Asset) []byte {
 			continue
 		}
 		if _, err := io.WriteString(w, asset.URL); err != nil {
-			return nil, fmt.Errorf("write url: %w", err)
+			return nil
 		}
 	}
 	_ = zw.Close()
