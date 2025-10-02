@@ -2,9 +2,7 @@ package repo
 
 import (
 	"context"
-	"fmt"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"server/internal/domain"
@@ -53,33 +51,16 @@ func (r *AssetRepositoryPG) SaveAll(ctx context.Context, jobID string, assets []
 		return nil
 	}
 
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback(ctx)
-		}
-	}()
-
 	query := `
 INSERT INTO assets (id, job_id, kind, url, width, height, checksum, bytes)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
 `
-	batch := &pgx.Batch{}
 	for _, asset := range assets {
 		a := asset
-		batch.Queue(query, a.ID, jobID, a.Kind, a.URL, a.Width, a.Height, a.Checksum, a.Bytes)
+		if _, err := r.pool.Exec(ctx, query, a.ID, jobID, a.Kind, a.URL, a.Width, a.Height, a.Checksum, a.Bytes); err != nil {
+			return err
+		}
 	}
 
-	br := tx.SendBatch(ctx, batch)
-	if err = br.Close(); err != nil {
-		return fmt.Errorf("insert assets batch: %w", err)
-	}
-
-	if err = tx.Commit(ctx); err != nil {
-		return err
-	}
 	return nil
 }
