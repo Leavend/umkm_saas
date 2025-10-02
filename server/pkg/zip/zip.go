@@ -22,7 +22,7 @@ func ArchiveAssets(assets []Asset) []byte {
 			continue
 		}
 		if _, err := io.WriteString(w, asset.URL); err != nil {
-			return fmt.Errorf("write url: %w", err)
+			return nil, fmt.Errorf("write url: %w", err)
 		}
 	}
 	_ = zw.Close()
