@@ -8,13 +8,13 @@ import (
 )
 
 type EnqueueReq struct {
-	Provider     string         `json:"provider"`      // NANO_BANANA | GOOGLE_VEO | ...
-	Model        string         `json:"model"`         // veo-2 | veo-3 | ...
-	SourceAsset  *string        `json:"source_asset"`  // UUID
-	PromptJSON   map[string]any `json:"prompt_json"`   // disimpan ke JSONB
-	AspectRatio  string         `json:"aspect_ratio"`  // 1:1, 4:3, 3:4, 16:9, 9:16
-	Quantity     int            `json:"quantity"`      // server akan cap max 2 utk free
-	TaskType     string         `json:"task_type"`     // IMAGE_GEN | VIDEO_GEN | UPSCALE
+	Provider    string         `json:"provider"`     // NANO_BANANA | GOOGLE_VEO | ...
+	Model       string         `json:"model"`        // veo-2 | veo-3 | ...
+	SourceAsset *string        `json:"source_asset"` // UUID
+	PromptJSON  map[string]any `json:"prompt_json"`  // disimpan ke JSONB
+	AspectRatio string         `json:"aspect_ratio"` // 1:1, 4:3, 3:4, 16:9, 9:16
+	Quantity    int            `json:"quantity"`     // server akan cap max 2 utk free
+	TaskType    string         `json:"task_type"`    // IMAGE_GEN | VIDEO_GEN | UPSCALE
 }
 
 func EnqueueRequestHandler(w http.ResponseWriter, r *http.Request) {
