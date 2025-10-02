@@ -1,0 +1,18 @@
+-- Optional: contoh function jika ingin ambil job via SQL Function.
+-- CREATE OR REPLACE FUNCTION fn_claim_next_job() RETURNS SETOF generation_requests AS $$
+-- BEGIN
+--   RETURN QUERY
+--   WITH next AS (
+--     SELECT id FROM generation_requests
+--     WHERE status='QUEUED'
+--     ORDER BY created_at
+--     FOR UPDATE SKIP LOCKED
+--     LIMIT 1
+--   )
+--   UPDATE generation_requests gr
+--   SET status='RUNNING', started_at=now()
+--   FROM next
+--   WHERE gr.id = next.id
+--   RETURNING gr.*;
+-- END;
+-- $$ LANGUAGE plpgsql;

@@ -1,0 +1,4 @@
+driver = "postgres"
+dir = "db/migrations"
+# Jalankan contoh:
+# goose -dir db/migrations postgres "$DATABASE_URL" up
