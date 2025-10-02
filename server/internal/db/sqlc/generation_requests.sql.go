@@ -41,7 +41,7 @@ type ClaimNextQueuedJobRow struct {
 
 // sql 8c01c6e6-1f8e-4f61-9e2d-6040d7cf24af
 func (q *Queries) ClaimNextQueuedJob(ctx context.Context) (ClaimNextQueuedJobRow, error) {
-	row := q.db.QueryRowContext(ctx, claimNextQueuedJob)
+	row := q.db.QueryRow(ctx, claimNextQueuedJob)
 	var i ClaimNextQueuedJobRow
 	err := row.Scan(
 		&i.ID,
@@ -76,7 +76,7 @@ type EnqueueGenerationParams struct {
 
 // sql 6e7e8d2a-8d3f-4a1b-9a55-44f6c6f6f2f1
 func (q *Queries) EnqueueGeneration(ctx context.Context, arg EnqueueGenerationParams) (GenerationRequest, error) {
-	row := q.db.QueryRowContext(ctx, enqueueGeneration,
+	row := q.db.QueryRow(ctx, enqueueGeneration,
 		arg.UserID,
 		arg.TaskType,
 		arg.Provider,
@@ -130,7 +130,7 @@ type GetRequestStatusRow struct {
 
 // sql 2fa8b4d9-7c2f-4b90-b2a3-1d6f5b2c2b9a
 func (q *Queries) GetRequestStatus(ctx context.Context, id uuid.UUID) (GetRequestStatusRow, error) {
-	row := q.db.QueryRowContext(ctx, getRequestStatus, id)
+	row := q.db.QueryRow(ctx, getRequestStatus, id)
 	var i GetRequestStatusRow
 	err := row.Scan(
 		&i.ID,

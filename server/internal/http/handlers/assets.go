@@ -3,21 +3,77 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"time"
+
+	"server/internal/sqlinline"
 
 	"github.com/go-chi/chi/v5"
 )
 
-func ListAssetsHandler(w http.ResponseWriter, r *http.Request) {
-	_ = json.NewEncoder(w).Encode([]map[string]any{
-		{"id": "ASSET-UUID-1", "kind": "ORIGINAL"},
-		{"id": "ASSET-UUID-2", "kind": "GENERATED"},
-	})
+func (a *App) ListAssets(w http.ResponseWriter, r *http.Request) {
+	userID := a.currentUserID(r)
+	if userID == "" {
+		a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 20
+	}
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	rows, err := a.SQL.Query(r.Context(), sqlinline.QListAssetsByUser, userID, limit, offset)
+	if err != nil {
+		a.error(w, http.StatusInternalServerError, "internal", "failed to load assets")
+		return
+	}
+	defer rows.Close()
+	var items []map[string]any
+	for rows.Next() {
+		var id, requestID, storageKey, mime string
+		var bytes int64
+		var width, height int
+		var aspect string
+		var props []byte
+		var createdAt time.Time
+		if err := rows.Scan(&id, &requestID, &storageKey, &mime, &bytes, &width, &height, &aspect, &props, &createdAt); err != nil {
+			continue
+		}
+		items = append(items, map[string]any{
+			"id":           id,
+			"request_id":   requestID,
+			"storage_key":  storageKey,
+			"mime":         mime,
+			"bytes":        bytes,
+			"width":        width,
+			"height":       height,
+			"aspect_ratio": aspect,
+			"properties":   json.RawMessage(props),
+			"created_at":   createdAt,
+		})
+	}
+	a.json(w, http.StatusOK, map[string]any{"items": items})
 }
 
-func DownloadAssetHandler(w http.ResponseWriter, r *http.Request) {
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"id":      chi.URLParam(r, "id"),
-		"message": "signed-url placeholder",
-		"url":     "https://storage.example/signed-url",
-	})
+func (a *App) DownloadAsset(w http.ResponseWriter, r *http.Request) {
+	userID := a.currentUserID(r)
+	if userID == "" {
+		a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
+		return
+	}
+	assetID := chi.URLParam(r, "id")
+	row := a.SQL.QueryRow(r.Context(), sqlinline.QSelectAssetByID, assetID)
+	var id, ownerID, storageKey, mime string
+	var bytes int64
+	var props []byte
+	if err := row.Scan(&id, &ownerID, &storageKey, &mime, &bytes, &props); err != nil {
+		a.error(w, http.StatusNotFound, "not_found", "asset not found")
+		return
+	}
+	if ownerID != userID {
+		a.error(w, http.StatusForbidden, "forbidden", "not your asset")
+		return
+	}
+	signedURL := a.Config.StorageBaseURL + "/" + storageKey
+	a.json(w, http.StatusOK, map[string]any{"url": signedURL, "mime": mime})
 }
