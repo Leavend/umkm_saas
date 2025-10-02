@@ -1,7 +1,8 @@
 package sqlinline
 
 const QEnqueueImageJob = `--sql 2caa5b21-4c2b-4b72-8a36-7d3d0f9b77a1
-with input as (
+with
+input as (
   select
     $1::uuid     as user_id,
     $2::jsonb    as prompt_json,
