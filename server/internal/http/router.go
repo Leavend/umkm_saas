@@ -1,7 +1,7 @@
-package http
+package httpapi
 
 import (
-	"net/http"
+	stdhttp "net/http"
 
 	"server/internal/http/handlers"
 
@@ -9,13 +9,15 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-func NewRouter() http.Handler {
+func NewRouter(app *handlers.App) stdhttp.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, middleware.Logger)
 
-	r.Get("/health", handlers.HealthHandler)
+	// Health
+	r.Get("/v1/healthz", app.Health)
 
 	r.Route("/me", func(r chi.Router) { r.Get("/", handlers.MeHandler) })
+
 	r.Route("/integrations/google", func(r chi.Router) {
 		r.Get("/status", handlers.GoogleStatusHandler)
 	})
@@ -31,5 +33,6 @@ func NewRouter() http.Handler {
 	})
 
 	r.Get("/metrics/dashboard-24h", handlers.Dashboard24hHandler)
+
 	return r
 }

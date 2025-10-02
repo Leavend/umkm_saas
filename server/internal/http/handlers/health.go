@@ -4,7 +4,6 @@ import (
 	"net/http"
 )
 
-func HealthHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+func (a *App) Health(w http.ResponseWriter, r *http.Request) {
+	a.json(w, http.StatusOK, map[string]string{"status": "ok"})
 }
