@@ -55,7 +55,6 @@ func (r *AssetRepositoryPG) SaveAll(ctx context.Context, jobID string, assets []
 INSERT INTO assets (id, job_id, kind, url, width, height, checksum, bytes)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
 `
-
 	for _, asset := range assets {
 		a := asset
 		if _, err := r.pool.Exec(ctx, query, a.ID, jobID, a.Kind, a.URL, a.Width, a.Height, a.Checksum, a.Bytes); err != nil {

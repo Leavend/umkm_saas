@@ -74,5 +74,6 @@ LIMIT 1;
 	); err != nil {
 		return nil, err
 	}
+
 	return &summary, nil
 }
