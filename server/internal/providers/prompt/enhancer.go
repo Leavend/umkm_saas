@@ -3,7 +3,9 @@ package prompt
 import (
 	"context"
 	"fmt"
-	"strings"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 type EnhanceRequest struct {
@@ -31,7 +33,8 @@ func NewStaticEnhancer() *StaticEnhancer {
 }
 
 func (s *StaticEnhancer) Enhance(ctx context.Context, req EnhanceRequest) (*EnhanceResponse, error) {
-	desc := fmt.Sprintf("%s %s dengan gaya premium", strings.Title(req.ProductType), req.Title)
+	c := cases.Title(language.Und)
+	desc := fmt.Sprintf("%s %s dengan gaya premium", c.String(req.ProductType), req.Title)
 	res := &EnhanceResponse{
 		Title:       fmt.Sprintf("%s Signature", req.Title),
 		Description: desc,
