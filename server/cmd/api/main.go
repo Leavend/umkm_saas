@@ -14,17 +14,14 @@ import (
 )
 
 func main() {
-	// Muat .env (opsional)
 	_ = godotenv.Load()
 
-	// Konfigurasi & logger
 	cfg, err := infra.LoadConfig()
 	if err != nil {
 		panic(err)
 	}
 	logger := infra.NewLogger(cfg.AppEnv)
 
-	// DB pool (pgxpool)
 	ctx := context.Background()
 	dbpool, err := infra.NewDBPool(ctx, cfg)
 	if err != nil {
@@ -32,16 +29,11 @@ func main() {
 	}
 	defer dbpool.Close()
 
-	// App container (inject DB & sqlc queries)
-	app := handlers.NewApp(dbpool)
+	app := handlers.NewApp(cfg, dbpool, logger)
 
-	// Bangun router via package httpapi (sudah ada middleware chi di dalamnya)
 	router := httpapi.NewRouter(app)
-
-	// HTTP server wrapper dari infra
 	server := infra.NewHTTPServer(cfg, router)
 
-	// Start async
 	go func() {
 		logger.Info().Msgf("API listening on :%s", cfg.Port)
 		if err := server.Start(); err != nil && err != os.ErrClosed {
@@ -49,7 +41,6 @@ func main() {
 		}
 	}()
 
-	// Graceful shutdown
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop

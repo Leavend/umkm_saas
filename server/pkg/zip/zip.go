@@ -1,0 +1,27 @@
+package zip
+
+import (
+	"archive/zip"
+	"bytes"
+	"io"
+)
+
+type Asset struct {
+	Filename string
+	MIME     string
+	URL      string
+}
+
+func ArchiveAssets(assets []Asset) []byte {
+	buf := &bytes.Buffer{}
+	zw := zip.NewWriter(buf)
+	for _, asset := range assets {
+		w, err := zw.Create(asset.Filename)
+		if err != nil {
+			continue
+		}
+		io.WriteString(w, asset.URL)
+	}
+	_ = zw.Close()
+	return buf.Bytes()
+}

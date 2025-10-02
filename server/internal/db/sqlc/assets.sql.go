@@ -40,7 +40,7 @@ type InsertAssetParams struct {
 
 // sql 4c2a1a9e-1b77-4b8e-a1d2-9a7b2c3d4e5f
 func (q *Queries) InsertAsset(ctx context.Context, arg InsertAssetParams) (Asset, error) {
-	row := q.db.QueryRowContext(ctx, insertAsset,
+	row := q.db.QueryRow(ctx, insertAsset,
 		arg.UserID,
 		arg.Kind,
 		arg.RequestID,
@@ -99,7 +99,7 @@ type ListAssetsByUserRow struct {
 
 // sql 9a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 func (q *Queries) ListAssetsByUser(ctx context.Context, arg ListAssetsByUserParams) ([]ListAssetsByUserRow, error) {
-	rows, err := q.db.QueryContext(ctx, listAssetsByUser, arg.UserID, arg.Column2)
+	rows, err := q.db.Query(ctx, listAssetsByUser, arg.UserID, arg.Column2)
 	if err != nil {
 		return nil, err
 	}
@@ -119,9 +119,6 @@ func (q *Queries) ListAssetsByUser(ctx context.Context, arg ListAssetsByUserPara
 			return nil, err
 		}
 		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

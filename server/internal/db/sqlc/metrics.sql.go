@@ -28,7 +28,7 @@ type GetDashboard24hRow struct {
 
 // sql 5d1b23a2-1d77-4df1-9c3a-9a1b2c3d4e5f
 func (q *Queries) GetDashboard24h(ctx context.Context) (GetDashboard24hRow, error) {
-	row := q.db.QueryRowContext(ctx, getDashboard24h)
+	row := q.db.QueryRow(ctx, getDashboard24h)
 	var i GetDashboard24hRow
 	err := row.Scan(
 		&i.ImageGenerated,
