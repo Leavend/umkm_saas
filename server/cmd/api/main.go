@@ -1,29 +1,55 @@
 package main
 
 import (
-	"database/sql"
-	"log"
-	"net/http"
+	"context"
+	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/joho/godotenv"
-	_ "github.com/lib/pq"
 
-	"server/internal/config"
-	api "server/internal/http"
+	"server/internal/infra"
 )
 
 func main() {
 	_ = godotenv.Load()
-	cfg := config.Load()
 
-	db, err := sql.Open("postgres", cfg.DatabaseURL)
+	cfg, err := infra.LoadConfig()
 	if err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
-	defer db.Close()
 
-	r := api.NewRouter(db)
-	addr := ":" + cfg.Port
-	log.Printf("API listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, r))
+	logger := infra.NewLogger(cfg.AppEnv)
+
+	ctx := context.Background()
+	dbpool, err := infra.NewDBPool(ctx, cfg)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("failed to connect database")
+	}
+	defer dbpool.Close()
+
+	router := chi.NewRouter()
+
+	server := infra.NewHTTPServer(cfg, router)
+
+	go func() {
+		logger.Info().Msgf("API listening on :%s", cfg.Port)
+		if err := server.Start(); err != nil && err != os.ErrClosed {
+			logger.Fatal().Err(err).Msg("http server failed")
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.HTTPIdleTimeout)
+	defer cancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		logger.Error().Err(err).Msg("failed to shutdown server")
+	}
+
+	logger.Info().Msg("server stopped")
 }

@@ -1,7 +1,6 @@
 package http
 
 import (
-	"database/sql"
 	"net/http"
 
 	"server/internal/http/handlers"
@@ -10,29 +9,27 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-func NewRouter(db *sql.DB) http.Handler {
-	h := handlers.NewApp(db)
-
+func NewRouter() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, middleware.Logger)
 
-	r.Get("/health", h.HealthHandler)
+	r.Get("/health", handlers.HealthHandler)
 
-	r.Route("/me", func(r chi.Router) { r.Get("/", h.MeHandler) })
+	r.Route("/me", func(r chi.Router) { r.Get("/", handlers.MeHandler) })
 	r.Route("/integrations/google", func(r chi.Router) {
-		r.Get("/status", h.GoogleStatusHandler)
+		r.Get("/status", handlers.GoogleStatusHandler)
 	})
 
 	r.Route("/requests", func(r chi.Router) {
-		r.Post("/", h.EnqueueRequestHandler)
-		r.Get("/{id}", h.GetRequestStatusHandler)
+		r.Post("/", handlers.EnqueueRequestHandler)
+		r.Get("/{id}", handlers.GetRequestStatusHandler)
 	})
 
 	r.Route("/assets", func(r chi.Router) {
-		r.Get("/", h.ListAssetsHandler)
-		r.Get("/{id}/download", h.DownloadAssetHandler)
+		r.Get("/", handlers.ListAssetsHandler)
+		r.Get("/{id}/download", handlers.DownloadAssetHandler)
 	})
 
-	r.Get("/metrics/dashboard-24h", h.Dashboard24hHandler)
+	r.Get("/metrics/dashboard-24h", handlers.Dashboard24hHandler)
 	return r
 }
