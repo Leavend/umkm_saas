@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Config is a reduced configuration model compatible with the real pgxpool.
@@ -57,6 +58,6 @@ func (p *Pool) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
 }
 
 // Exec returns an empty command tag and a nil error to mimic successful execution.
-func (p *Pool) Exec(_ context.Context, _ string, _ ...any) (pgx.CommandTag, error) {
-	return pgx.CommandTag{}, nil
+func (p *Pool) Exec(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, nil
 }
