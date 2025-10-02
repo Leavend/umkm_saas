@@ -30,7 +30,7 @@ type GetGoogleAccountByUserRow struct {
 
 // sql 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 func (q *Queries) GetGoogleAccountByUser(ctx context.Context, userID uuid.UUID) (GetGoogleAccountByUserRow, error) {
-	row := q.db.QueryRowContext(ctx, getGoogleAccountByUser, userID)
+	row := q.db.QueryRow(ctx, getGoogleAccountByUser, userID)
 	var i GetGoogleAccountByUserRow
 	err := row.Scan(
 		&i.ID,
