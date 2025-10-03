@@ -13,7 +13,7 @@ updated as (
     update generation_requests
     set status = 'RUNNING', updated_at = now()
     where id in (select id from next_job)
-    returning id, user_id, provider, quantity, aspect_ratio, prompt_json
+    returning id, user_id, task_type, provider, quantity, aspect_ratio, prompt_json
 )
 select * from updated;
 `

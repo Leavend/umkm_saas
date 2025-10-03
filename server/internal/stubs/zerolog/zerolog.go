@@ -77,6 +77,12 @@ type Event struct {
 	logger Logger
 	level  Level
 	err    error
+	fields []field
+}
+
+type field struct {
+	key   string
+	value string
 }
 
 // newEvent creates a new event for the given level.
@@ -93,6 +99,12 @@ func (l Logger) Error() *Event { return l.newEvent(InfoLevel) }
 // Fatal starts a fatal-level event.
 func (l Logger) Fatal() *Event { return l.newEvent(InfoLevel) }
 
+// Str records a string field on the event for compatibility with zerolog.
+func (e *Event) Str(key, value string) *Event {
+	e.fields = append(e.fields, field{key: key, value: value})
+	return e
+}
+
 // Err attaches an error to the event for compatibility.
 func (e *Event) Err(err error) *Event {
 	e.err = err
@@ -102,20 +114,51 @@ func (e *Event) Err(err error) *Event {
 // Msg writes the message to the underlying writer when available.
 func (e *Event) Msg(msg string) {
 	if e.logger.writer != nil {
-		if e.err != nil {
-			_, _ = fmt.Fprintf(e.logger.writer, "%s: %v\n", msg, e.err)
-			return
+		line := msg
+		if len(e.fields) > 0 {
+			line = fmt.Sprintf("%s %s", formatFields(e.fields), msg)
 		}
-		_, _ = fmt.Fprintln(e.logger.writer, msg)
+		if e.err != nil {
+			line = fmt.Sprintf("%s: %v", line, e.err)
+		}
+		_, _ = fmt.Fprintln(e.logger.writer, line)
 	}
 }
 
 // Msgf writes a formatted message to the underlying writer.
 func (e *Event) Msgf(format string, args ...any) {
 	if e.logger.writer != nil {
+		prefix := ""
+		if len(e.fields) > 0 {
+			prefix = formatFields(e.fields) + " "
+		}
 		if e.err != nil {
 			args = append(args, e.err)
 		}
-		_, _ = fmt.Fprintf(e.logger.writer, format+"\n", args...)
+		_, _ = fmt.Fprintf(e.logger.writer, prefix+format+"\n", args...)
 	}
+}
+
+// formatFields formats structured fields for the stub logger output.
+func formatFields(fields []field) string {
+	if len(fields) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(fields))
+	for _, f := range fields {
+		parts = append(parts, fmt.Sprintf("%s=%s", f.key, f.value))
+	}
+	return "{" + join(parts, ", ") + "}"
+}
+
+// join is a minimal replacement for strings.Join to avoid pulling additional deps.
+func join(parts []string, sep string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	result := parts[0]
+	for i := 1; i < len(parts); i++ {
+		result += sep + parts[i]
+	}
+	return result
 }
