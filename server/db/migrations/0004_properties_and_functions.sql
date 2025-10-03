@@ -59,6 +59,7 @@ CREATE INDEX IF NOT EXISTS ix_usage_events_request_id ON usage_events(request_id
 CREATE INDEX IF NOT EXISTS ix_usage_events_user_id ON usage_events(user_id);
 CREATE INDEX IF NOT EXISTS ix_donations_created_at ON donations(created_at DESC);
 
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION fn_consume_quota(p_user_id uuid, p_used int)
 RETURNS TABLE (remaining int) AS $$
 DECLARE
@@ -91,7 +92,9 @@ BEGIN
     RETURN NEXT;
 END;
 $$ LANGUAGE plpgsql;
+-- +goose StatementEnd
 
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION fn_insert_job_and_usage(
     p_user_id uuid,
     p_task text,
@@ -118,6 +121,7 @@ BEGIN
     RETURN NEXT;
 END;
 $$ LANGUAGE plpgsql;
+-- +goose StatementEnd
 
 CREATE OR REPLACE VIEW vw_stats_summary AS
 WITH totals AS (
