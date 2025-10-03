@@ -1,11 +1,12 @@
 package handlers
 
 import (
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"strings"
-	"time"
+        "context"
+        "encoding/json"
+        "fmt"
+        "net/http"
+        "strings"
+        "time"
 
 	"server/internal/domain/jsoncfg"
 	"server/internal/middleware"
@@ -29,10 +30,10 @@ type jobResponse struct {
 }
 
 func (a *App) ImagesGenerate(w http.ResponseWriter, r *http.Request) {
-	userID := a.currentUserID(r)
-	if userID == "" {
-		a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
-		return
+        userID := a.currentUserID(r)
+        if userID == "" {
+                a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
+                return
 	}
 	var req imageGenerateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -81,43 +82,56 @@ func (a *App) ImagesGenerate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ImageStatus(w http.ResponseWriter, r *http.Request) {
-	jobID := chi.URLParam(r, "job_id")
-	if jobID == "" {
-		a.error(w, http.StatusBadRequest, "bad_request", "job_id required")
-		return
-	}
-	row := a.SQL.QueryRow(r.Context(), sqlinline.QSelectJobStatus, jobID)
-	var id, userID, taskType, status, provider string
-	var quantity int
-	var aspect string
-	var createdAt, updatedAt time.Time
-	var props []byte
-	if err := row.Scan(&id, &userID, &taskType, &status, &provider, &quantity, &aspect, &createdAt, &updatedAt, &props); err != nil {
-		a.error(w, http.StatusNotFound, "not_found", "job not found")
-		return
-	}
-	a.json(w, http.StatusOK, map[string]any{
-		"id":           id,
-		"user_id":      userID,
-		"task_type":    taskType,
-		"status":       status,
-		"provider":     provider,
-		"quantity":     quantity,
-		"aspect_ratio": aspect,
-		"created_at":   createdAt,
-		"updated_at":   updatedAt,
-		"properties":   json.RawMessage(props),
-	})
+        userID := a.currentUserID(r)
+        if userID == "" {
+                a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
+                return
+        }
+        jobID := chi.URLParam(r, "job_id")
+        if jobID == "" {
+                a.error(w, http.StatusBadRequest, "bad_request", "job_id required")
+                return
+        }
+        job, err := a.loadJobForUser(r.Context(), jobID, userID)
+        if err != nil {
+                a.error(w, http.StatusNotFound, "not_found", "job not found")
+                return
+        }
+        a.json(w, http.StatusOK, map[string]any{
+                "id":           job.ID,
+                "user_id":      job.UserID,
+                "task_type":    job.TaskType,
+                "status":       job.Status,
+                "provider":     job.Provider,
+                "quantity":     job.Quantity,
+                "aspect_ratio": job.Aspect,
+                "created_at":   job.CreatedAt,
+                "updated_at":   job.UpdatedAt,
+                "properties":   json.RawMessage(job.Properties),
+        })
 }
 
 func (a *App) ImageAssets(w http.ResponseWriter, r *http.Request) {
-	jobID := chi.URLParam(r, "job_id")
-	rows, err := a.SQL.Query(r.Context(), sqlinline.QSelectJobAssets, jobID)
-	if err != nil {
-		a.error(w, http.StatusInternalServerError, "internal", "failed to load assets")
-		return
-	}
-	defer rows.Close()
+        userID := a.currentUserID(r)
+        if userID == "" {
+                a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
+                return
+        }
+        jobID := chi.URLParam(r, "job_id")
+        if jobID == "" {
+                a.error(w, http.StatusBadRequest, "bad_request", "job_id required")
+                return
+        }
+        if _, err := a.loadJobForUser(r.Context(), jobID, userID); err != nil {
+                a.error(w, http.StatusNotFound, "not_found", "job not found")
+                return
+        }
+        rows, err := a.SQL.Query(r.Context(), sqlinline.QSelectJobAssets, jobID, userID)
+        if err != nil {
+                a.error(w, http.StatusInternalServerError, "internal", "failed to load assets")
+                return
+        }
+        defer rows.Close()
 	var items []map[string]any
 	for rows.Next() {
 		var id, storageKey, mime string
@@ -145,13 +159,26 @@ func (a *App) ImageAssets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ImageZip(w http.ResponseWriter, r *http.Request) {
-	jobID := chi.URLParam(r, "job_id")
-	rows, err := a.SQL.Query(r.Context(), sqlinline.QSelectJobAssets, jobID)
-	if err != nil {
-		a.error(w, http.StatusInternalServerError, "internal", "failed to fetch assets")
-		return
-	}
-	defer rows.Close()
+        userID := a.currentUserID(r)
+        if userID == "" {
+                a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
+                return
+        }
+        jobID := chi.URLParam(r, "job_id")
+        if jobID == "" {
+                a.error(w, http.StatusBadRequest, "bad_request", "job_id required")
+                return
+        }
+        if _, err := a.loadJobForUser(r.Context(), jobID, userID); err != nil {
+                a.error(w, http.StatusNotFound, "not_found", "job not found")
+                return
+        }
+        rows, err := a.SQL.Query(r.Context(), sqlinline.QSelectJobAssets, jobID, userID)
+        if err != nil {
+                a.error(w, http.StatusInternalServerError, "internal", "failed to fetch assets")
+                return
+        }
+        defer rows.Close()
 	var assets []zip.Asset
 	for rows.Next() {
 		var id, storageKey, mime string
@@ -173,5 +200,27 @@ func (a *App) ImageZip(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ImagesEnhance(w http.ResponseWriter, r *http.Request) {
-	a.ImagesGenerate(w, r)
+        a.ImagesGenerate(w, r)
+}
+
+type jobRecord struct {
+        ID         string
+        UserID     string
+        TaskType   string
+        Status     string
+        Provider   string
+        Quantity   int
+        Aspect     string
+        CreatedAt  time.Time
+        UpdatedAt  time.Time
+        Properties []byte
+}
+
+func (a *App) loadJobForUser(ctx context.Context, jobID, userID string) (*jobRecord, error) {
+        row := a.SQL.QueryRow(ctx, sqlinline.QSelectJobStatus, jobID, userID)
+        var job jobRecord
+        if err := row.Scan(&job.ID, &job.UserID, &job.TaskType, &job.Status, &job.Provider, &job.Quantity, &job.Aspect, &job.CreatedAt, &job.UpdatedAt, &job.Properties); err != nil {
+                return nil, err
+        }
+        return &job, nil
 }
