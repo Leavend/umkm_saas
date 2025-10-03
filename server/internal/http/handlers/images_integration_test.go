@@ -401,7 +401,7 @@ func (f *fakeSQLRunner) QueryRow(_ context.Context, query string, args ...any) p
 	switch query {
 	case sqlinline.QEnqueueImageJob:
 		if len(args) != 5 {
-			return simpleRow{scan: func(dest ...any) error { return fmt.Errorf("unexpected args") }}
+			return handlers.NewSimpleRow(func(dest ...any) error { return fmt.Errorf("unexpected args") })
 		}
 		userID, _ := args[0].(string)
 		prompt, _ := args[1].([]byte)
@@ -410,7 +410,7 @@ func (f *fakeSQLRunner) QueryRow(_ context.Context, query string, args ...any) p
 		provider, _ := args[4].(string)
 		user, ok := f.users[userID]
 		if !ok {
-			return simpleRow{scan: func(dest ...any) error { return fmt.Errorf("user not found") }}
+			return handlers.NewSimpleRow(func(dest ...any) error { return fmt.Errorf("user not found") })
 		}
 		if quantity <= 0 {
 			quantity = jsoncfg.DefaultPromptQuantity
@@ -419,7 +419,7 @@ func (f *fakeSQLRunner) QueryRow(_ context.Context, query string, args ...any) p
 			quantity = jsoncfg.MaxPromptQuantity
 		}
 		if user.QuotaUsed+quantity > user.QuotaDaily {
-			return simpleRow{scan: func(dest ...any) error { return fmt.Errorf("quota exceeded") }}
+			return handlers.NewSimpleRow(func(dest ...any) error { return fmt.Errorf("quota exceeded") })
 		}
 		user.QuotaUsed += quantity
 		f.jobSeq++
@@ -440,7 +440,7 @@ func (f *fakeSQLRunner) QueryRow(_ context.Context, query string, args ...any) p
 		f.jobs[jobID] = job
 		f.jobOrder = append(f.jobOrder, jobID)
 		remaining := user.QuotaDaily - user.QuotaUsed
-		return simpleRow{scan: func(dest ...any) error {
+		return handlers.NewSimpleRow(func(dest ...any) error {
 			if len(dest) != 2 {
 				return fmt.Errorf("unexpected scan args: %d", len(dest))
 			}
@@ -460,20 +460,20 @@ func (f *fakeSQLRunner) QueryRow(_ context.Context, query string, args ...any) p
 				return fmt.Errorf("remaining dest type unsupported")
 			}
 			return nil
-		}}
+		})
 	case sqlinline.QSelectJobStatus:
 		if len(args) != 2 {
-			return simpleRow{scan: func(dest ...any) error { return fmt.Errorf("unexpected args") }}
+			return handlers.NewSimpleRow(func(dest ...any) error { return fmt.Errorf("unexpected args") })
 		}
 		jobID, _ := args[0].(string)
 		userID, _ := args[1].(string)
 		job, ok := f.jobs[jobID]
 		if !ok || job.UserID != userID {
-			return simpleRow{scan: func(dest ...any) error { return pgx.ErrNoRows }}
+			return handlers.NewSimpleRow(func(dest ...any) error { return pgx.ErrNoRows })
 		}
 		jobCopy := *job
 		propsCopy := append([]byte(nil), jobCopy.Props...)
-		return simpleRow{scan: func(dest ...any) error {
+		return handlers.NewSimpleRow(func(dest ...any) error {
 			if len(dest) != 10 {
 				return fmt.Errorf("unexpected scan args: %d", len(dest))
 			}
@@ -533,7 +533,7 @@ func (f *fakeSQLRunner) QueryRow(_ context.Context, query string, args ...any) p
 				return fmt.Errorf("dest[9] not *[]byte")
 			}
 			return nil
-		}}
+		})
 	case sqlinline.QWorkerClaimJob:
 		for _, id := range f.jobOrder {
 			job := f.jobs[id]
@@ -543,7 +543,7 @@ func (f *fakeSQLRunner) QueryRow(_ context.Context, query string, args ...any) p
 			job.Status = "RUNNING"
 			job.UpdatedAt = time.Now()
 			promptCopy := append([]byte(nil), job.Prompt...)
-			return simpleRow{scan: func(dest ...any) error {
+			return handlers.NewSimpleRow(func(dest ...any) error {
 				if len(dest) != 7 {
 					return fmt.Errorf("unexpected scan args: %d", len(dest))
 				}
@@ -583,11 +583,11 @@ func (f *fakeSQLRunner) QueryRow(_ context.Context, query string, args ...any) p
 					return fmt.Errorf("dest[6] not *[]byte")
 				}
 				return nil
-			}}
+			})
 		}
-		return simpleRow{scan: func(dest ...any) error { return pgx.ErrNoRows }}
+		return handlers.NewSimpleRow(func(dest ...any) error { return pgx.ErrNoRows })
 	default:
-		return simpleRow{scan: func(dest ...any) error { return fmt.Errorf("unexpected query: %s", query) }}
+		return handlers.NewSimpleRow(func(dest ...any) error { return fmt.Errorf("unexpected query: %s", query) })
 	}
 }
 
@@ -614,7 +614,7 @@ func (f *fakeSQLRunner) Query(_ context.Context, query string, args ...any) (pgx
 }
 
 type fakeRows struct {
-	testRowsBase
+	handlers.TestRowsBase
 	items []testAsset
 	idx   int
 }
