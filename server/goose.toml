@@ -1,2 +1,2 @@
 driver = "postgres"
-dir = "internal/adapter/repo/migrations"
+dir = "db/migrations"

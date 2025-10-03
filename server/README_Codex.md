@@ -115,6 +115,10 @@ curl -i http://localhost:1919/v1/healthz
 /pkg/zip/                 # util zip ([]byte, error)
 ```
 
+> **Catatan kebersihan struktur:** Lapisan repo legacy (`internal/adapter/repo/*`) dan folder placeholder kosong
+> (`internal/provider`, `internal/security`, `internal/telemetry`, `internal/util`) telah dihapus agar peta DDD
+> lebih ringkas dan fokus pada Go wrapper + SQL inline.
+
 ---
 
 ## 5) DB & Migrasi
