@@ -27,6 +27,10 @@ make verify
 
 ## Key endpoints
 ```bash
+# API documentation
+curl -i http://localhost:8080/v1/openapi.json
+curl -i http://localhost:8080/v1/docs
+
 # Health
 curl -i http://localhost:8080/v1/healthz
 

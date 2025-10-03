@@ -43,6 +43,8 @@ curl -i http://localhost:1919/v1/healthz
 ### Tanpa autentikasi
 
 * `GET  /v1/healthz` → health OK.
+* `GET  /v1/openapi.json` → spesifikasi OpenAPI statis.
+* `GET  /v1/docs` → Redoc menampilkan spesifikasi di atas.
 * `POST /v1/auth/google/verify` → verifikasi Google **ID token** (JWKS), **upsert user + external_account**, balas **JWT + profil**.
 * `GET  /v1/stats/summary` → agregasi statistik langsung dari DB (view/CTE).
 * `POST /v1/donations`, `GET /v1/donations/testimonials` → mencatat donasi & membaca testimoni via SQL.
