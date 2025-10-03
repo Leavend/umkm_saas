@@ -1,0 +1,27 @@
+# Build artifacts
+# Abaikan hasil kompilasi dan direktori output
+/bin/
+/build/
+/dist/
+*.exe
+*.out
+
+# Environment variables
+# Jangan pernah commit secrets. Gunakan .env.example sebagai template.
+.env
+
+# Log files
+# Abaikan file log yang dibuat selama development atau di production.
+*.log
+logs/
+
+# IDE & editor directories
+# Pengaturan personal tidak seharusnya ada di dalam repository.
+.vscode/
+.idea/
+*.sublime-*
+
+# OS-generated files
+# Abaikan file metadata yang dibuat oleh sistem operasi.
+.DS_Store
+Thumbs.db

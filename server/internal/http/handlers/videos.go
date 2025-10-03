@@ -54,30 +54,30 @@ func (a *App) VideosGenerate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) VideoStatus(w http.ResponseWriter, r *http.Request) {
-        a.ImageStatus(w, r)
+	a.ImageStatus(w, r)
 }
 
 func (a *App) VideoAssets(w http.ResponseWriter, r *http.Request) {
-        userID := a.currentUserID(r)
-        if userID == "" {
-                a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
-                return
-        }
-        jobID := chi.URLParam(r, "job_id")
-        if jobID == "" {
-                a.error(w, http.StatusBadRequest, "bad_request", "job_id required")
-                return
-        }
-        if _, err := a.loadJobForUser(r.Context(), jobID, userID); err != nil {
-                a.error(w, http.StatusNotFound, "not_found", "job not found")
-                return
-        }
-        rows, err := a.SQL.Query(r.Context(), sqlinline.QSelectJobAssets, jobID, userID)
-        if err != nil {
-                a.error(w, http.StatusInternalServerError, "internal", "failed to fetch video assets")
-                return
-        }
-        defer rows.Close()
+	userID := a.currentUserID(r)
+	if userID == "" {
+		a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
+		return
+	}
+	jobID := chi.URLParam(r, "job_id")
+	if jobID == "" {
+		a.error(w, http.StatusBadRequest, "bad_request", "job_id required")
+		return
+	}
+	if _, err := a.loadJobForUser(r.Context(), jobID, userID); err != nil {
+		a.error(w, http.StatusNotFound, "not_found", "job not found")
+		return
+	}
+	rows, err := a.SQL.Query(r.Context(), sqlinline.QSelectJobAssets, jobID, userID)
+	if err != nil {
+		a.error(w, http.StatusInternalServerError, "internal", "failed to fetch video assets")
+		return
+	}
+	defer rows.Close()
 	var items []map[string]any
 	for rows.Next() {
 		var id, storageKey, mime string

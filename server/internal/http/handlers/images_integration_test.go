@@ -26,10 +26,10 @@ import (
 )
 
 func TestImagesGenerateIntegration(t *testing.T) {
-        ctx := context.Background()
-        runner := newFakeSQLRunner()
-        userID := uuid.NewString()
-        runner.addUser(userID, 2)
+	ctx := context.Background()
+	runner := newFakeSQLRunner()
+	userID := uuid.NewString()
+	runner.addUser(userID, 2)
 
 	cfg := &infra.Config{
 		AppEnv:          "test",
@@ -163,101 +163,101 @@ func TestImagesGenerateIntegration(t *testing.T) {
 }
 
 func TestImageJobAccessControl(t *testing.T) {
-        runner := newFakeSQLRunner()
-        ownerID := uuid.NewString()
-        otherID := uuid.NewString()
-        runner.addUser(ownerID, 2)
-        runner.addUser(otherID, 2)
+	runner := newFakeSQLRunner()
+	ownerID := uuid.NewString()
+	otherID := uuid.NewString()
+	runner.addUser(ownerID, 2)
+	runner.addUser(otherID, 2)
 
-        cfg := &infra.Config{
-                AppEnv:          "test",
-                JWTSecret:       "test-secret",
-                RateLimitPerMin: 100,
-        }
-        logger := infra.NewLogger("test")
-        app := &handlers.App{
-                Config:         cfg,
-                Logger:         logger,
-                SQL:            runner,
-                ImageProviders: map[string]image.Generator{"gemini": image.NewNanoBanana()},
-                VideoProviders: map[string]videoprovider.Generator{},
-                JWTSecret:      cfg.JWTSecret,
-        }
-        router := httpapi.NewRouter(app)
+	cfg := &infra.Config{
+		AppEnv:          "test",
+		JWTSecret:       "test-secret",
+		RateLimitPerMin: 100,
+	}
+	logger := infra.NewLogger("test")
+	app := &handlers.App{
+		Config:         cfg,
+		Logger:         logger,
+		SQL:            runner,
+		ImageProviders: map[string]image.Generator{"gemini": image.NewNanoBanana()},
+		VideoProviders: map[string]videoprovider.Generator{},
+		JWTSecret:      cfg.JWTSecret,
+	}
+	router := httpapi.NewRouter(app)
 
-        reqPayload := imageGenerateReq{
-                Prompt: jsoncfg.PromptJSON{Title: "Ayam Bakar"},
-        }
-        body, err := json.Marshal(reqPayload)
-        if err != nil {
-                t.Fatalf("marshal payload: %v", err)
-        }
-        generateReq := httptest.NewRequest(http.MethodPost, "/v1/images/generate", bytes.NewReader(body))
-        generateReq.Header.Set("Content-Type", "application/json")
-        ownerToken := newToken(t, cfg.JWTSecret, ownerID)
-        generateReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	reqPayload := imageGenerateReq{
+		Prompt: jsoncfg.PromptJSON{Title: "Ayam Bakar"},
+	}
+	body, err := json.Marshal(reqPayload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	generateReq := httptest.NewRequest(http.MethodPost, "/v1/images/generate", bytes.NewReader(body))
+	generateReq.Header.Set("Content-Type", "application/json")
+	ownerToken := newToken(t, cfg.JWTSecret, ownerID)
+	generateReq.Header.Set("Authorization", "Bearer "+ownerToken)
 
-        generateRes := httptest.NewRecorder()
-        router.ServeHTTP(generateRes, generateReq)
+	generateRes := httptest.NewRecorder()
+	router.ServeHTTP(generateRes, generateReq)
 
-        if generateRes.Code != http.StatusAccepted {
-                t.Fatalf("generate status = %d, want %d", generateRes.Code, http.StatusAccepted)
-        }
+	if generateRes.Code != http.StatusAccepted {
+		t.Fatalf("generate status = %d, want %d", generateRes.Code, http.StatusAccepted)
+	}
 
-        var jobRes jobResponseDTO
-        if err := json.Unmarshal(generateRes.Body.Bytes(), &jobRes); err != nil {
-                t.Fatalf("decode response: %v", err)
-        }
+	var jobRes jobResponseDTO
+	if err := json.Unmarshal(generateRes.Body.Bytes(), &jobRes); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 
-        statusReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/images/%s/status", jobRes.JobID), nil)
-        statusReq.Header.Set("Authorization", "Bearer "+ownerToken)
-        statusRes := httptest.NewRecorder()
-        router.ServeHTTP(statusRes, statusReq)
-        if statusRes.Code != http.StatusOK {
-                t.Fatalf("owner status = %d, want %d", statusRes.Code, http.StatusOK)
-        }
+	statusReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/images/%s/status", jobRes.JobID), nil)
+	statusReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	statusRes := httptest.NewRecorder()
+	router.ServeHTTP(statusRes, statusReq)
+	if statusRes.Code != http.StatusOK {
+		t.Fatalf("owner status = %d, want %d", statusRes.Code, http.StatusOK)
+	}
 
-        otherToken := newToken(t, cfg.JWTSecret, otherID)
+	otherToken := newToken(t, cfg.JWTSecret, otherID)
 
-        unauthorizedStatus := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/images/%s/status", jobRes.JobID), nil)
-        unauthorizedStatus.Header.Set("Authorization", "Bearer "+otherToken)
-        unauthorizedStatusRes := httptest.NewRecorder()
-        router.ServeHTTP(unauthorizedStatusRes, unauthorizedStatus)
-        if unauthorizedStatusRes.Code != http.StatusNotFound {
-                t.Fatalf("other user status = %d, want %d", unauthorizedStatusRes.Code, http.StatusNotFound)
-        }
+	unauthorizedStatus := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/images/%s/status", jobRes.JobID), nil)
+	unauthorizedStatus.Header.Set("Authorization", "Bearer "+otherToken)
+	unauthorizedStatusRes := httptest.NewRecorder()
+	router.ServeHTTP(unauthorizedStatusRes, unauthorizedStatus)
+	if unauthorizedStatusRes.Code != http.StatusNotFound {
+		t.Fatalf("other user status = %d, want %d", unauthorizedStatusRes.Code, http.StatusNotFound)
+	}
 
-        unauthorizedAssets := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/images/%s/assets", jobRes.JobID), nil)
-        unauthorizedAssets.Header.Set("Authorization", "Bearer "+otherToken)
-        unauthorizedAssetsRes := httptest.NewRecorder()
-        router.ServeHTTP(unauthorizedAssetsRes, unauthorizedAssets)
-        if unauthorizedAssetsRes.Code != http.StatusNotFound {
-                t.Fatalf("other user assets = %d, want %d", unauthorizedAssetsRes.Code, http.StatusNotFound)
-        }
+	unauthorizedAssets := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/images/%s/assets", jobRes.JobID), nil)
+	unauthorizedAssets.Header.Set("Authorization", "Bearer "+otherToken)
+	unauthorizedAssetsRes := httptest.NewRecorder()
+	router.ServeHTTP(unauthorizedAssetsRes, unauthorizedAssets)
+	if unauthorizedAssetsRes.Code != http.StatusNotFound {
+		t.Fatalf("other user assets = %d, want %d", unauthorizedAssetsRes.Code, http.StatusNotFound)
+	}
 
-        unauthorizedZip := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/images/%s/zip", jobRes.JobID), nil)
-        unauthorizedZip.Header.Set("Authorization", "Bearer "+otherToken)
-        unauthorizedZipRes := httptest.NewRecorder()
-        router.ServeHTTP(unauthorizedZipRes, unauthorizedZip)
-        if unauthorizedZipRes.Code != http.StatusNotFound {
-                t.Fatalf("other user zip = %d, want %d", unauthorizedZipRes.Code, http.StatusNotFound)
-        }
+	unauthorizedZip := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/images/%s/zip", jobRes.JobID), nil)
+	unauthorizedZip.Header.Set("Authorization", "Bearer "+otherToken)
+	unauthorizedZipRes := httptest.NewRecorder()
+	router.ServeHTTP(unauthorizedZipRes, unauthorizedZip)
+	if unauthorizedZipRes.Code != http.StatusNotFound {
+		t.Fatalf("other user zip = %d, want %d", unauthorizedZipRes.Code, http.StatusNotFound)
+	}
 }
 
 func newToken(t *testing.T, secret, userID string) string {
-        t.Helper()
-        token, err := middleware.SignJWT(secret, middleware.TokenClaims{
-                Sub:      userID,
-                Plan:     "free",
-                Locale:   "id",
-                Exp:      time.Now().Add(time.Hour).Unix(),
-                Issuer:   "integration-test",
-                Audience: "client-test",
-        })
-        if err != nil {
-                t.Fatalf("sign jwt: %v", err)
-        }
-        return token
+	t.Helper()
+	token, err := middleware.SignJWT(secret, middleware.TokenClaims{
+		Sub:      userID,
+		Plan:     "free",
+		Locale:   "id",
+		Exp:      time.Now().Add(time.Hour).Unix(),
+		Issuer:   "integration-test",
+		Audience: "client-test",
+	})
+	if err != nil {
+		t.Fatalf("sign jwt: %v", err)
+	}
+	return token
 }
 
 type imageGenerateReq struct {
@@ -289,18 +289,18 @@ type testUser struct {
 }
 
 type testJob struct {
-        ID        string
-        UserID    string
-        TaskType  string
-        Provider  string
-        Quantity  int
-        Aspect    string
-        Prompt    []byte
-        Status    string
-        Assets    []testAsset
-        CreatedAt time.Time
-        UpdatedAt time.Time
-        Props     []byte
+	ID        string
+	UserID    string
+	TaskType  string
+	Provider  string
+	Quantity  int
+	Aspect    string
+	Prompt    []byte
+	Status    string
+	Assets    []testAsset
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	Props     []byte
 }
 
 type testAsset struct {
@@ -424,22 +424,22 @@ func (f *fakeSQLRunner) QueryRow(_ context.Context, query string, args ...any) p
 		user.QuotaUsed += quantity
 		f.jobSeq++
 		jobID := fmt.Sprintf("job-%d", f.jobSeq)
-                job := &testJob{
-                        ID:        jobID,
-                        UserID:    userID,
-                        TaskType:  "IMAGE_GEN",
-                        Provider:  provider,
-                        Quantity:  quantity,
-                        Aspect:    aspect,
-                        Prompt:    append([]byte(nil), prompt...),
-                        Status:    "QUEUED",
-                        CreatedAt: time.Now(),
-                        UpdatedAt: time.Now(),
-                        Props:     []byte("{}"),
-                }
-                f.jobs[jobID] = job
-                f.jobOrder = append(f.jobOrder, jobID)
-                remaining := user.QuotaDaily - user.QuotaUsed
+		job := &testJob{
+			ID:        jobID,
+			UserID:    userID,
+			TaskType:  "IMAGE_GEN",
+			Provider:  provider,
+			Quantity:  quantity,
+			Aspect:    aspect,
+			Prompt:    append([]byte(nil), prompt...),
+			Status:    "QUEUED",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			Props:     []byte("{}"),
+		}
+		f.jobs[jobID] = job
+		f.jobOrder = append(f.jobOrder, jobID)
+		remaining := user.QuotaDaily - user.QuotaUsed
 		return pgx.SimpleRow{ScanFunc: func(dest ...any) error {
 			if len(dest) != 2 {
 				return fmt.Errorf("unexpected scan args: %d", len(dest))
@@ -461,84 +461,84 @@ func (f *fakeSQLRunner) QueryRow(_ context.Context, query string, args ...any) p
 			}
 			return nil
 		}}
-        case sqlinline.QSelectJobStatus:
-                if len(args) != 2 {
-                        return pgx.SimpleRow{ScanFunc: func(dest ...any) error { return fmt.Errorf("unexpected args") }}
-                }
-                jobID, _ := args[0].(string)
-                userID, _ := args[1].(string)
-                job, ok := f.jobs[jobID]
-                if !ok || job.UserID != userID {
-                        return pgx.SimpleRow{ScanFunc: func(dest ...any) error { return pgx.ErrNoRows }}
-                }
-                jobCopy := *job
-                propsCopy := append([]byte(nil), jobCopy.Props...)
-                return pgx.SimpleRow{ScanFunc: func(dest ...any) error {
-                        if len(dest) != 10 {
-                                return fmt.Errorf("unexpected scan args: %d", len(dest))
-                        }
-                        if v, ok := dest[0].(*string); ok {
-                                *v = jobCopy.ID
-                        } else {
-                                return fmt.Errorf("dest[0] not *string")
-                        }
-                        if v, ok := dest[1].(*string); ok {
-                                *v = jobCopy.UserID
-                        } else {
-                                return fmt.Errorf("dest[1] not *string")
-                        }
-                        if v, ok := dest[2].(*string); ok {
-                                *v = jobCopy.TaskType
-                        } else {
-                                return fmt.Errorf("dest[2] not *string")
-                        }
-                        if v, ok := dest[3].(*string); ok {
-                                *v = jobCopy.Status
-                        } else {
-                                return fmt.Errorf("dest[3] not *string")
-                        }
-                        if v, ok := dest[4].(*string); ok {
-                                *v = jobCopy.Provider
-                        } else {
-                                return fmt.Errorf("dest[4] not *string")
-                        }
-                        switch v := dest[5].(type) {
-                        case *int:
-                                *v = jobCopy.Quantity
-                        case *int32:
-                                *v = int32(jobCopy.Quantity)
-                        case *int64:
-                                *v = int64(jobCopy.Quantity)
-                        default:
-                                return fmt.Errorf("dest[5] unsupported type")
-                        }
-                        if v, ok := dest[6].(*string); ok {
-                                *v = jobCopy.Aspect
-                        } else {
-                                return fmt.Errorf("dest[6] not *string")
-                        }
-                        if v, ok := dest[7].(*time.Time); ok {
-                                *v = jobCopy.CreatedAt
-                        } else {
-                                return fmt.Errorf("dest[7] not *time.Time")
-                        }
-                        if v, ok := dest[8].(*time.Time); ok {
-                                *v = jobCopy.UpdatedAt
-                        } else {
-                                return fmt.Errorf("dest[8] not *time.Time")
-                        }
-                        if v, ok := dest[9].(*[]byte); ok {
-                                *v = append([]byte(nil), propsCopy...)
-                        } else {
-                                return fmt.Errorf("dest[9] not *[]byte")
-                        }
-                        return nil
-                }}
-        case sqlinline.QWorkerClaimJob:
-                for _, id := range f.jobOrder {
-                        job := f.jobs[id]
-                        if job.Status != "QUEUED" {
-                                continue
+	case sqlinline.QSelectJobStatus:
+		if len(args) != 2 {
+			return pgx.SimpleRow{ScanFunc: func(dest ...any) error { return fmt.Errorf("unexpected args") }}
+		}
+		jobID, _ := args[0].(string)
+		userID, _ := args[1].(string)
+		job, ok := f.jobs[jobID]
+		if !ok || job.UserID != userID {
+			return pgx.SimpleRow{ScanFunc: func(dest ...any) error { return pgx.ErrNoRows }}
+		}
+		jobCopy := *job
+		propsCopy := append([]byte(nil), jobCopy.Props...)
+		return pgx.SimpleRow{ScanFunc: func(dest ...any) error {
+			if len(dest) != 10 {
+				return fmt.Errorf("unexpected scan args: %d", len(dest))
+			}
+			if v, ok := dest[0].(*string); ok {
+				*v = jobCopy.ID
+			} else {
+				return fmt.Errorf("dest[0] not *string")
+			}
+			if v, ok := dest[1].(*string); ok {
+				*v = jobCopy.UserID
+			} else {
+				return fmt.Errorf("dest[1] not *string")
+			}
+			if v, ok := dest[2].(*string); ok {
+				*v = jobCopy.TaskType
+			} else {
+				return fmt.Errorf("dest[2] not *string")
+			}
+			if v, ok := dest[3].(*string); ok {
+				*v = jobCopy.Status
+			} else {
+				return fmt.Errorf("dest[3] not *string")
+			}
+			if v, ok := dest[4].(*string); ok {
+				*v = jobCopy.Provider
+			} else {
+				return fmt.Errorf("dest[4] not *string")
+			}
+			switch v := dest[5].(type) {
+			case *int:
+				*v = jobCopy.Quantity
+			case *int32:
+				*v = int32(jobCopy.Quantity)
+			case *int64:
+				*v = int64(jobCopy.Quantity)
+			default:
+				return fmt.Errorf("dest[5] unsupported type")
+			}
+			if v, ok := dest[6].(*string); ok {
+				*v = jobCopy.Aspect
+			} else {
+				return fmt.Errorf("dest[6] not *string")
+			}
+			if v, ok := dest[7].(*time.Time); ok {
+				*v = jobCopy.CreatedAt
+			} else {
+				return fmt.Errorf("dest[7] not *time.Time")
+			}
+			if v, ok := dest[8].(*time.Time); ok {
+				*v = jobCopy.UpdatedAt
+			} else {
+				return fmt.Errorf("dest[8] not *time.Time")
+			}
+			if v, ok := dest[9].(*[]byte); ok {
+				*v = append([]byte(nil), propsCopy...)
+			} else {
+				return fmt.Errorf("dest[9] not *[]byte")
+			}
+			return nil
+		}}
+	case sqlinline.QWorkerClaimJob:
+		for _, id := range f.jobOrder {
+			job := f.jobs[id]
+			if job.Status != "QUEUED" {
+				continue
 			}
 			job.Status = "RUNNING"
 			job.UpdatedAt = time.Now()
@@ -592,107 +592,107 @@ func (f *fakeSQLRunner) QueryRow(_ context.Context, query string, args ...any) p
 }
 
 func (f *fakeSQLRunner) Query(_ context.Context, query string, args ...any) (pgx.Rows, error) {
-        f.mu.Lock()
-        defer f.mu.Unlock()
-        switch query {
-        case sqlinline.QSelectJobAssets:
-                if len(args) != 2 {
-                        return nil, fmt.Errorf("unexpected args for select assets: %d", len(args))
-                }
-                jobID, _ := args[0].(string)
-                userID, _ := args[1].(string)
-                job, ok := f.jobs[jobID]
-                if !ok || job.UserID != userID {
-                        return &fakeRows{}, nil
-                }
-                assets := make([]testAsset, len(job.Assets))
-                copy(assets, job.Assets)
-                return &fakeRows{items: assets}, nil
-        default:
-                return nil, fmt.Errorf("unexpected query: %s", query)
-        }
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch query {
+	case sqlinline.QSelectJobAssets:
+		if len(args) != 2 {
+			return nil, fmt.Errorf("unexpected args for select assets: %d", len(args))
+		}
+		jobID, _ := args[0].(string)
+		userID, _ := args[1].(string)
+		job, ok := f.jobs[jobID]
+		if !ok || job.UserID != userID {
+			return &fakeRows{}, nil
+		}
+		assets := make([]testAsset, len(job.Assets))
+		copy(assets, job.Assets)
+		return &fakeRows{items: assets}, nil
+	default:
+		return nil, fmt.Errorf("unexpected query: %s", query)
+	}
 }
 
 type fakeRows struct {
-        items []testAsset
-        idx   int
+	items []testAsset
+	idx   int
 }
 
 func (r *fakeRows) Next() bool {
-        if r.idx >= len(r.items) {
-                return false
-        }
-        r.idx++
-        return true
+	if r.idx >= len(r.items) {
+		return false
+	}
+	r.idx++
+	return true
 }
 
 func (r *fakeRows) Scan(dest ...any) error {
-        if r.idx == 0 || r.idx > len(r.items) {
-                return pgx.ErrNoRows
-        }
-        asset := r.items[r.idx-1]
-        if len(dest) != 9 {
-                return fmt.Errorf("unexpected scan args: %d", len(dest))
-        }
-        if v, ok := dest[0].(*string); ok {
-                *v = asset.ID
-        } else {
-                return fmt.Errorf("dest[0] not *string")
-        }
-        if v, ok := dest[1].(*string); ok {
-                *v = asset.Storage
-        } else {
-                return fmt.Errorf("dest[1] not *string")
-        }
-        if v, ok := dest[2].(*string); ok {
-                *v = asset.MIME
-        } else {
-                return fmt.Errorf("dest[2] not *string")
-        }
-        switch v := dest[3].(type) {
-        case *int64:
-                *v = asset.Bytes
-        case *int:
-                *v = int(asset.Bytes)
-        default:
-                return fmt.Errorf("dest[3] unsupported type")
-        }
-        switch v := dest[4].(type) {
-        case *int:
-                *v = asset.Width
-        case *int32:
-                *v = int32(asset.Width)
-        default:
-                return fmt.Errorf("dest[4] unsupported type")
-        }
-        switch v := dest[5].(type) {
-        case *int:
-                *v = asset.Height
-        case *int32:
-                *v = int32(asset.Height)
-        default:
-                return fmt.Errorf("dest[5] unsupported type")
-        }
-        if v, ok := dest[6].(*string); ok {
-                *v = asset.Aspect
-        } else {
-                return fmt.Errorf("dest[6] not *string")
-        }
-        if v, ok := dest[7].(*[]byte); ok {
-                *v = append([]byte(nil), asset.Props...)
-        } else {
-                return fmt.Errorf("dest[7] not *[]byte")
-        }
-        if v, ok := dest[8].(*time.Time); ok {
-                *v = asset.CreatedAt
-        } else {
-                return fmt.Errorf("dest[8] not *time.Time")
-        }
-        return nil
+	if r.idx == 0 || r.idx > len(r.items) {
+		return pgx.ErrNoRows
+	}
+	asset := r.items[r.idx-1]
+	if len(dest) != 9 {
+		return fmt.Errorf("unexpected scan args: %d", len(dest))
+	}
+	if v, ok := dest[0].(*string); ok {
+		*v = asset.ID
+	} else {
+		return fmt.Errorf("dest[0] not *string")
+	}
+	if v, ok := dest[1].(*string); ok {
+		*v = asset.Storage
+	} else {
+		return fmt.Errorf("dest[1] not *string")
+	}
+	if v, ok := dest[2].(*string); ok {
+		*v = asset.MIME
+	} else {
+		return fmt.Errorf("dest[2] not *string")
+	}
+	switch v := dest[3].(type) {
+	case *int64:
+		*v = asset.Bytes
+	case *int:
+		*v = int(asset.Bytes)
+	default:
+		return fmt.Errorf("dest[3] unsupported type")
+	}
+	switch v := dest[4].(type) {
+	case *int:
+		*v = asset.Width
+	case *int32:
+		*v = int32(asset.Width)
+	default:
+		return fmt.Errorf("dest[4] unsupported type")
+	}
+	switch v := dest[5].(type) {
+	case *int:
+		*v = asset.Height
+	case *int32:
+		*v = int32(asset.Height)
+	default:
+		return fmt.Errorf("dest[5] unsupported type")
+	}
+	if v, ok := dest[6].(*string); ok {
+		*v = asset.Aspect
+	} else {
+		return fmt.Errorf("dest[6] not *string")
+	}
+	if v, ok := dest[7].(*[]byte); ok {
+		*v = append([]byte(nil), asset.Props...)
+	} else {
+		return fmt.Errorf("dest[7] not *[]byte")
+	}
+	if v, ok := dest[8].(*time.Time); ok {
+		*v = asset.CreatedAt
+	} else {
+		return fmt.Errorf("dest[8] not *time.Time")
+	}
+	return nil
 }
 
 func (r *fakeRows) Err() error {
-        return nil
+	return nil
 }
 
 func (r *fakeRows) Close() {}
