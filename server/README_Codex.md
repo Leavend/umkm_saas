@@ -62,7 +62,7 @@ curl -i http://localhost:1919/v1/healthz
   > Catatan: ada endpoint **enhance**. Standarisasi final disarankan: `POST /v1/images/enhance`.
 * **Videos**:
 
-  * `POST /v1/videos/generate` *(saat ini sinkron stub; **target**: async via worker)*
+* `POST /v1/videos/generate` *(enqueue → diproses worker async)*
   * `GET  /v1/videos/{job_id}/status|assets`
 * **Ideas**: `POST /v1/ideas/from-image` → validasi & kembalikan 2 ide dummy.
 * **Assets**:
@@ -73,8 +73,8 @@ curl -i http://localhost:1919/v1/healthz
 ### Infrastruktur yang sudah ada
 
 * **Kuota harian**: di `users.properties` + **`fn_consume_quota`** (atomik saat enqueue).
-* **Worker**: ambil job `queued` (`FOR UPDATE SKIP LOCKED`) → set `running` → panggil provider gambar **stub** → simpan aset → set `succeeded/failed`.
-* **Video**: saat ini **sync** (di handler) → **TODO** pindah ke **worker**.
+* **Worker**: ambil job `queued` (`FOR UPDATE SKIP LOCKED`) → set `running` → panggil provider gambar/video **stub** → simpan aset → set `succeeded/failed`.
+* **Video**: sekarang ikut pipeline async di worker (enqueue → worker → assets & status).
 * **sqllint**: build-blocking; inline SQL wajib ber-UUID.
 * **Makefile**: target `run`, `worker`, `migrate`, `lint`, `verify`.
 
@@ -268,7 +268,7 @@ POST /images/{job_id}/zip
 
 POST /ideas/from-image
 
-POST /videos/generate              # target: async (enqueue) → worker
+POST /videos/generate              # async (enqueue) → worker
 GET  /videos/{job_id}/status
 GET  /videos/{job_id}/assets
 
@@ -280,7 +280,7 @@ POST /donations
 GET  /donations/testimonials
 ```
 
-> **Catatan:** Saat ini videos **sync** (stub), **TODO** pindah ke worker agar konsisten dengan images.
+> **Catatan:** Videos sekarang mengikuti pipeline async worker → status berubah `queued → running → succeeded/failed`.
 
 ---
 

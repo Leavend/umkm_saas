@@ -38,7 +38,7 @@ curl -i -X POST http://localhost:8080/v1/auth/google/verify \
 # Current user
 curl -i -H "Authorization: Bearer <JWT>" http://localhost:8080/v1/me
 
-# Generate images
+# Generate images (async via worker)
 curl -i -X POST http://localhost:8080/v1/images/generate \
   -H "Authorization: Bearer <JWT>" -H 'Content-Type: application/json' \
   -d '{
@@ -65,6 +65,11 @@ curl -i -H "Authorization: Bearer <JWT>" http://localhost:8080/v1/images/<JOB_ID
 
 # Zip assets
 curl -i -X POST -H "Authorization: Bearer <JWT>" http://localhost:8080/v1/images/<JOB_ID>/zip
+
+# Generate videos (async via worker)
+curl -i -X POST -H "Authorization: Bearer <JWT>" http://localhost:8080/v1/videos/generate \
+  -H 'Content-Type: application/json' \
+  -d '{"provider":"veo2","prompt":"Hero shot ramen"}'
 
 # Ideas
 curl -i -X POST -H "Authorization: Bearer <JWT>" http://localhost:8080/v1/ideas/from-image \
