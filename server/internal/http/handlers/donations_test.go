@@ -78,7 +78,7 @@ func (d *donationTestSQL) Exec(context.Context, string, ...any) (pgconn.CommandT
 }
 
 func (d *donationTestSQL) QueryRow(context.Context, string, ...any) pgx.Row {
-	return pgx.SimpleRow{}
+	return simpleRow{}
 }
 
 func (d *donationTestSQL) Query(_ context.Context, query string, args ...any) (pgx.Rows, error) {
@@ -92,6 +92,7 @@ func (d *donationTestSQL) Query(_ context.Context, query string, args ...any) (p
 }
 
 type donationRowsIterator struct {
+	testRowsBase
 	rows []donationRow
 	idx  int
 }
