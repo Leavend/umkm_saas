@@ -23,6 +23,8 @@ type testRowsBase struct{}
 
 func (testRowsBase) CommandTag() pgconn.CommandTag { return pgconn.CommandTag{} }
 
+func (testRowsBase) Conn() *pgx.Conn { return nil }
+
 func (testRowsBase) FieldDescriptions() []pgproto3.FieldDescription { return nil }
 
 func (testRowsBase) Values() ([]any, error) {
