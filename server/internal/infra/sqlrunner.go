@@ -116,3 +116,10 @@ func extractMarker(query string) (string, string, error) {
 }
 
 var _ SQLExecutor = (*SQLRunner)(nil)
+
+// IsNoRows reports whether the provided error indicates that a query returned
+// no rows. It mirrors pgx.ErrNoRows but keeps the dependency contained within
+// the infra package so that callers do not need to import pgx directly.
+func IsNoRows(err error) bool {
+	return errors.Is(err, pgx.ErrNoRows)
+}

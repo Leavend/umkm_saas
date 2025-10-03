@@ -13,3 +13,13 @@ require (
 	golang.org/x/text v0.29.0
 )
 
+// Provide lightweight stub implementations so the module graph remains
+// buildable in constrained environments (e.g. CI without network access).
+// Production builds should override these replacements to pull the real
+// dependencies.
+replace (
+	github.com/jackc/pgx/v5 => ./internal/stubs/pgx
+	github.com/lib/pq => ./internal/stubs/libpq
+	github.com/oschwald/geoip2-golang => ./internal/stubs/geoip2
+	github.com/rs/zerolog => ./internal/stubs/zerolog
+)
