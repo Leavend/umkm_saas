@@ -13,7 +13,16 @@ upserted as (
     insert into users (id, clerk_user_id, email, name, avatar_url, plan, locale_pref, google_sub, properties, created_at, updated_at)
     values (gen_random_uuid(), (select google_sub from incoming), (select email from incoming), (select name from incoming),
             (select picture from incoming), 'free', (select locale from incoming), (select google_sub from incoming),
-            jsonb_build_object('quota_daily', 2, 'quota_used_today', 0, 'preferred_locale', (select locale from incoming)), now(), now())
+            jsonb_build_object(
+                'quota_daily', 2,
+                'quota_used_today', 0,
+                'preferred_locale', (select locale from incoming),
+                'google_sub', (select google_sub from incoming),
+                'google_email', (select email from incoming),
+                'google_name', (select name from incoming),
+                'google_picture', (select picture from incoming),
+                'google_locale', (select locale from incoming)
+            ), now(), now())
     on conflict (email) do update set
         name = excluded.name,
         avatar_url = excluded.avatar_url,
@@ -21,17 +30,47 @@ upserted as (
         google_sub = excluded.google_sub,
         updated_at = now(),
         properties = jsonb_set(
-            jsonb_set(users.properties, '{preferred_locale}', to_jsonb((select locale from incoming)), true),
-            '{google_picture}', to_jsonb((select picture from incoming)), true
+            jsonb_set(
+                jsonb_set(
+                    jsonb_set(
+                        jsonb_set(
+                            jsonb_set(
+                                users.properties,
+                                '{preferred_locale}', to_jsonb((select locale from incoming)), true
+                            ),
+                            '{google_sub}', to_jsonb((select google_sub from incoming)), true
+                        ),
+                        '{google_email}', to_jsonb((select email from incoming)), true
+                    ),
+                    '{google_name}', to_jsonb((select name from incoming)), true
+                ),
+                '{google_picture}', to_jsonb((select picture from incoming)), true
+            ),
+            '{google_locale}', to_jsonb((select locale from incoming)), true
         )
     returning id, plan, properties
 ),
 linked as (
     insert into external_accounts (id, user_id, provider, external_user_id, properties, created_at, updated_at)
-    values (gen_random_uuid(), (select id from upserted), 'google', (select google_sub from incoming), '{}'::jsonb, now(), now())
+    values (
+        gen_random_uuid(),
+        (select id from upserted),
+        'google',
+        (select google_sub from incoming),
+        jsonb_build_object(
+            'google_sub', (select google_sub from incoming),
+            'google_email', (select email from incoming),
+            'google_name', (select name from incoming),
+            'google_picture', (select picture from incoming),
+            'google_locale', (select locale from incoming)
+        ),
+        now(),
+        now()
+    )
     on conflict (provider, external_user_id) do update set
         user_id = excluded.user_id,
-        updated_at = now()
+        updated_at = now(),
+        properties = excluded.properties
     returning user_id
 )
 select u.id, u.plan, u.properties
