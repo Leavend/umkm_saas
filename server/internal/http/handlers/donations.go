@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -47,16 +48,21 @@ func (a *App) DonationsTestimonials(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	var items []map[string]any
 	for rows.Next() {
-		var id, userID, note, testimonial string
+		var id, note, testimonial string
+		var userID sql.NullString
 		var amount int64
 		var props []byte
 		var createdAt time.Time
 		if err := rows.Scan(&id, &userID, &amount, &note, &testimonial, &props, &createdAt); err != nil {
 			continue
 		}
+		var normalizedUserID any
+		if userID.Valid {
+			normalizedUserID = userID.String
+		}
 		items = append(items, map[string]any{
 			"id":          id,
-			"user_id":     userID,
+			"user_id":     normalizedUserID,
 			"amount":      amount,
 			"note":        note,
 			"testimonial": testimonial,
