@@ -12,6 +12,13 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// SQLExecutor defines the contract required by handlers for executing SQL queries.
+type SQLExecutor interface {
+	Exec(ctx context.Context, query string, args ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, query string, args ...any) pgx.Row
+	Query(ctx context.Context, query string, args ...any) (pgx.Rows, error)
+}
+
 var markerRegexp = regexp.MustCompile(`^--sql [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type SQLRunner struct {
@@ -107,3 +114,5 @@ func extractMarker(query string) (string, string, error) {
 	}
 	return strings.TrimSpace(strings.TrimPrefix(markerLine, "--sql ")), strings.Join(lines[1:], "\n"), nil
 }
+
+var _ SQLExecutor = (*SQLRunner)(nil)

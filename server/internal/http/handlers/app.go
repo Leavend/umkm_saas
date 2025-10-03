@@ -19,7 +19,7 @@ type App struct {
 	Config         *infra.Config
 	Logger         zerolog.Logger
 	DB             *pgxpool.Pool
-	SQL            *infra.SQLRunner
+	SQL            infra.SQLExecutor
 	GoogleVerifier *googleauth.Verifier
 	PromptEnhancer prompt.Enhancer
 	ImageProviders map[string]image.Generator
