@@ -105,7 +105,9 @@ func (v *Verifier) refresh(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	var set jwks
 	if err := json.NewDecoder(resp.Body).Decode(&set); err != nil {
 		return err
@@ -142,7 +144,9 @@ func (v *Verifier) fetchConfig(ctx context.Context) (*struct {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	var cfg struct {
 		JWKSURI string `json:"jwks_uri"`
 	}
