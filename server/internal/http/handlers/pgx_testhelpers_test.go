@@ -5,7 +5,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgproto3"
 )
 
 type simpleRow struct {
@@ -25,7 +24,7 @@ func (testRowsBase) CommandTag() pgconn.CommandTag { return pgconn.CommandTag{} 
 
 func (testRowsBase) Conn() *pgx.Conn { return nil }
 
-func (testRowsBase) FieldDescriptions() []pgproto3.FieldDescription { return nil }
+func (testRowsBase) FieldDescriptions() []pgconn.FieldDescription { return nil }
 
 func (testRowsBase) Values() ([]any, error) {
 	return nil, fmt.Errorf("values not supported in test rows")
