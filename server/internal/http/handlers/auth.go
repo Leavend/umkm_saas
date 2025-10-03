@@ -66,6 +66,11 @@ func (a *App) AuthGoogleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	props, quotaDaily, quotaUsed := extractQuota(propsBytes)
+	if v, ok := props["preferred_locale"].(string); ok && v != "" {
+		locale = v
+	} else if v, ok := props["google_locale"].(string); ok && v != "" {
+		locale = v
+	}
 	token, err := middleware.SignJWT(a.JWTSecret, middleware.TokenClaims{
 		Sub:      userID,
 		Plan:     plan,
