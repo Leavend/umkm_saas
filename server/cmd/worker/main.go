@@ -3,6 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"server/internal/domain/jsoncfg"
@@ -11,8 +16,42 @@ import (
 	videoprovider "server/internal/providers/video"
 	"server/internal/sqlinline"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog"
 )
+
+const (
+	taskTypeImage = "IMAGE_GEN"
+	taskTypeVideo = "VIDEO_GEN"
+
+	statusSucceeded = "SUCCEEDED"
+	statusFailed    = "FAILED"
+
+	defaultImageProvider = "gemini"
+	defaultVideoProvider = "veo2"
+
+	jobPollInterval = 2 * time.Second
+)
+
+type job struct {
+	ID       string
+	UserID   string
+	TaskType string
+	Provider string
+	Quantity int
+	Aspect   string
+	Prompt   json.RawMessage
+}
+
+type jobWorker struct {
+	ctx            context.Context
+	runner         *infra.SQLRunner
+	logger         zerolog.Logger
+	imageProviders map[string]image.Generator
+	videoProviders map[string]videoprovider.Generator
+}
+
+var errNoJobAvailable = errors.New("no job available")
 
 func main() {
 	cfg, err := infra.LoadConfig()
@@ -21,127 +60,217 @@ func main() {
 	}
 	logger := infra.NewLogger(cfg.AppEnv)
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	pool, err := infra.NewDBPool(ctx, cfg)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("worker: db connection failed")
 	}
 	defer pool.Close()
 
-	runner := infra.NewSQLRunner(pool, logger)
-	imageProviders := map[string]image.Generator{
+	worker := &jobWorker{
+		ctx:            ctx,
+		runner:         infra.NewSQLRunner(pool, logger),
+		logger:         logger,
+		imageProviders: initImageProviders(),
+		videoProviders: initVideoProviders(),
+	}
+
+	if err := worker.Run(); err != nil && !errors.Is(err, context.Canceled) {
+		logger.Fatal().Err(err).Msg("worker: stopped with error")
+	}
+	logger.Info().Msg("worker: stopped")
+}
+
+func initImageProviders() map[string]image.Generator {
+	return map[string]image.Generator{
 		"gemini":     image.NewNanoBanana(),
 		"nanobanana": image.NewNanoBanana(),
 	}
-	videoProviders := map[string]videoprovider.Generator{
+}
+
+func initVideoProviders() map[string]videoprovider.Generator {
+	return map[string]videoprovider.Generator{
 		"veo2": videoprovider.NewVEO(),
 		"veo3": videoprovider.NewVEO(),
 	}
+}
 
-	logger.Info().Msg("worker started")
+func (w *jobWorker) Run() error {
+	w.logger.Info().Msg("worker: started")
 	for {
 		select {
-		case <-ctx.Done():
-			return
+		case <-w.ctx.Done():
+			return w.ctx.Err()
 		default:
 		}
-		var jobID, userID, taskType, provider string
-		var quantity int
-		var aspect string
-		var promptBytes []byte
-		row := runner.QueryRow(ctx, sqlinline.QWorkerClaimJob)
-		if err := row.Scan(&jobID, &userID, &taskType, &provider, &quantity, &aspect, &promptBytes); err != nil {
-			time.Sleep(2 * time.Second)
+
+		j, err := w.claimJob()
+		if err != nil {
+			if errors.Is(err, errNoJobAvailable) {
+				time.Sleep(jobPollInterval)
+				continue
+			}
+			w.logger.Error().Err(err).Msg("worker: failed to claim job")
+			time.Sleep(jobPollInterval)
 			continue
 		}
-		logger.Info().Str("job_id", jobID).Str("task_type", taskType).Msg("worker: picked job")
-		status := "FAILED"
-		switch taskType {
-		case "IMAGE_GEN":
-			status = processImageJob(ctx, runner, imageProviders, logger, jobID, userID, provider, quantity, aspect, promptBytes)
-		case "VIDEO_GEN":
-			status = processVideoJob(ctx, runner, videoProviders, logger, jobID, userID, provider, aspect, promptBytes)
-		default:
-			logger.Error().Str("job_id", jobID).Str("task_type", taskType).Msg("worker: unsupported job type")
-		}
-		if _, err := runner.Exec(ctx, sqlinline.QUpdateJobStatus, jobID, status); err != nil {
-			logger.Error().Err(err).Msgf("worker: update status failed for %s", jobID)
-		}
+
+		w.handleJob(j)
 	}
 }
 
-func processImageJob(
-	ctx context.Context,
-	runner *infra.SQLRunner,
-	providers map[string]image.Generator,
-	logger zerolog.Logger,
-	jobID, userID, provider string,
-	quantity int,
-	aspect string,
-	promptBytes []byte,
-) string {
-	var prompt jsoncfg.PromptJSON
-	_ = json.Unmarshal(promptBytes, &prompt)
-	generator, ok := providers[provider]
-	if !ok {
-		provider = "gemini"
-		generator = providers[provider]
+func (w *jobWorker) handleJob(j job) {
+	w.logger.Info().Str("job_id", j.ID).Str("task_type", j.TaskType).Msg("worker: picked job")
+	status := statusFailed
+	if err := w.dispatch(j); err != nil {
+		w.logger.Error().Err(err).Str("job_id", j.ID).Msg("worker: job failed")
+	} else {
+		status = statusSucceeded
 	}
-	assets, err := generator.Generate(ctx, image.GenerateRequest{
+	if err := w.updateStatus(j.ID, status); err != nil {
+		w.logger.Error().Err(err).Str("job_id", j.ID).Msg("worker: update status failed")
+	}
+}
+
+func (w *jobWorker) dispatch(j job) error {
+	switch j.TaskType {
+	case taskTypeImage:
+		return w.processImageJob(j)
+	case taskTypeVideo:
+		return w.processVideoJob(j)
+	default:
+		return fmt.Errorf("unsupported job type %q", j.TaskType)
+	}
+}
+
+func (w *jobWorker) claimJob() (job, error) {
+	row := w.runner.QueryRow(w.ctx, sqlinline.QWorkerClaimJob)
+	var j job
+	if err := row.Scan(&j.ID, &j.UserID, &j.TaskType, &j.Provider, &j.Quantity, &j.Aspect, &j.Prompt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return job{}, errNoJobAvailable
+		}
+		return job{}, err
+	}
+	// Ensure prompt bytes are not aliased.
+	j.Prompt = append(json.RawMessage(nil), j.Prompt...)
+	return j, nil
+}
+
+func (w *jobWorker) updateStatus(jobID, status string) error {
+	_, err := w.runner.Exec(w.ctx, sqlinline.QUpdateJobStatus, jobID, status)
+	return err
+}
+
+func (w *jobWorker) processImageJob(j job) error {
+	var prompt jsoncfg.PromptJSON
+	if err := json.Unmarshal(j.Prompt, &prompt); err != nil {
+		return fmt.Errorf("decode image prompt: %w", err)
+	}
+	generator, provider := w.selectImageProvider(j.Provider)
+	if generator == nil {
+		return fmt.Errorf("image provider %q not configured", provider)
+	}
+	assets, err := generator.Generate(w.ctx, image.GenerateRequest{
 		Prompt:       prompt.Title,
-		Quantity:     quantity,
-		AspectRatio:  aspect,
+		Quantity:     j.Quantity,
+		AspectRatio:  j.Aspect,
 		Provider:     provider,
-		RequestID:    jobID,
+		RequestID:    j.ID,
 		Locale:       prompt.Extras.Locale,
 		WatermarkTag: prompt.Watermark.Text,
 	})
 	if err != nil {
-		logger.Error().Err(err).Str("job_id", jobID).Msg("worker: image generation failed")
-		return "FAILED"
+		return fmt.Errorf("image generation: %w", err)
 	}
+	metadata := map[string]any{"provider": provider}
 	for _, asset := range assets {
-		if _, execErr := runner.Exec(ctx, sqlinline.QInsertAsset, userID, "GENERATED", jobID, asset.URL, asset.Format, int64(1024*1024), asset.Width, asset.Height, aspect, jsoncfg.MustMarshal(map[string]any{"provider": provider})); execErr != nil {
-			logger.Error().Err(execErr).Str("job_id", jobID).Msg("worker: insert image asset failed")
+		if _, execErr := w.runner.Exec(
+			w.ctx,
+			sqlinline.QInsertAsset,
+			j.UserID,
+			"GENERATED",
+			j.ID,
+			asset.URL,
+			asset.Format,
+			int64(1024*1024),
+			asset.Width,
+			asset.Height,
+			j.Aspect,
+			jsoncfg.MustMarshal(metadata),
+		); execErr != nil {
+			w.logger.Error().Err(execErr).Str("job_id", j.ID).Msg("worker: insert image asset failed")
 		}
 	}
-	return "SUCCEEDED"
+	return nil
 }
 
-func processVideoJob(
-	ctx context.Context,
-	runner *infra.SQLRunner,
-	providers map[string]videoprovider.Generator,
-	logger zerolog.Logger,
-	jobID, userID, provider, aspect string,
-	promptBytes []byte,
-) string {
+func (w *jobWorker) processVideoJob(j job) error {
 	payload := map[string]any{}
-	_ = json.Unmarshal(promptBytes, &payload)
-	promptText := extractPromptText(payload)
+	if len(j.Prompt) > 0 {
+		if err := json.Unmarshal(j.Prompt, &payload); err != nil {
+			return fmt.Errorf("decode video prompt: %w", err)
+		}
+	}
+	generator, provider := w.selectVideoProvider(j.Provider)
+	if generator == nil {
+		return fmt.Errorf("video provider %q not configured", provider)
+	}
 	locale := ""
 	if v, ok := payload["locale"].(string); ok {
 		locale = v
 	}
-	generator, ok := providers[provider]
-	if !ok {
-		provider = "veo2"
-		generator = providers[provider]
-	}
-	asset, err := generator.Generate(ctx, videoprovider.GenerateRequest{
-		Prompt:    promptText,
+	asset, err := generator.Generate(w.ctx, videoprovider.GenerateRequest{
+		Prompt:    extractPromptText(payload),
 		Provider:  provider,
-		RequestID: jobID,
+		RequestID: j.ID,
 		Locale:    locale,
 	})
 	if err != nil {
-		logger.Error().Err(err).Str("job_id", jobID).Msg("worker: video generation failed")
-		return "FAILED"
+		return fmt.Errorf("video generation: %w", err)
 	}
-	if _, execErr := runner.Exec(ctx, sqlinline.QInsertAsset, userID, "GENERATED", jobID, asset.URL, asset.Format, int64(5*1024*1024), 1920, 1080, aspect, jsoncfg.MustMarshal(map[string]any{"provider": provider, "length": asset.Length})); execErr != nil {
-		logger.Error().Err(execErr).Str("job_id", jobID).Msg("worker: insert video asset failed")
+	metadata := map[string]any{"provider": provider, "length": asset.Length}
+	if _, execErr := w.runner.Exec(
+		w.ctx,
+		sqlinline.QInsertAsset,
+		j.UserID,
+		"GENERATED",
+		j.ID,
+		asset.URL,
+		asset.Format,
+		int64(5*1024*1024),
+		1920,
+		1080,
+		j.Aspect,
+		jsoncfg.MustMarshal(metadata),
+	); execErr != nil {
+		w.logger.Error().Err(execErr).Str("job_id", j.ID).Msg("worker: insert video asset failed")
 	}
-	return "SUCCEEDED"
+	return nil
+}
+
+func (w *jobWorker) selectImageProvider(requested string) (image.Generator, string) {
+	if generator, ok := w.imageProviders[requested]; ok {
+		return generator, requested
+	}
+	generator, ok := w.imageProviders[defaultImageProvider]
+	if !ok {
+		return nil, requested
+	}
+	return generator, defaultImageProvider
+}
+
+func (w *jobWorker) selectVideoProvider(requested string) (videoprovider.Generator, string) {
+	if generator, ok := w.videoProviders[requested]; ok {
+		return generator, requested
+	}
+	generator, ok := w.videoProviders[defaultVideoProvider]
+	if !ok {
+		return nil, requested
+	}
+	return generator, defaultVideoProvider
 }
 
 func extractPromptText(payload map[string]any) string {
