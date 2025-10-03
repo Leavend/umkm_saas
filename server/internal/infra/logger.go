@@ -26,3 +26,9 @@ func NewLogger(appEnv string) zerolog.Logger {
 
 	return logger
 }
+
+// Logger aliases the zerolog.Logger so callers outside the infra package can
+// depend on the logging contract without importing the third-party module
+// directly. It keeps the freedom to replace the underlying logger in the
+// future while presenting a stable surface area.
+type Logger = zerolog.Logger
