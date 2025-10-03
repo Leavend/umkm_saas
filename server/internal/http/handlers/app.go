@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"server/internal/infra"
+	"server/internal/infra/geoip"
 	googleauth "server/internal/infra/google"
 	"server/internal/middleware"
 	"server/internal/providers/image"
@@ -20,6 +21,7 @@ type App struct {
 	Logger         zerolog.Logger
 	DB             *pgxpool.Pool
 	SQL            infra.SQLExecutor
+	GeoIPResolver  geoip.CountryResolver
 	GoogleVerifier *googleauth.Verifier
 	PromptEnhancer prompt.Enhancer
 	ImageProviders map[string]image.Generator
@@ -29,11 +31,16 @@ type App struct {
 
 func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 	runner := infra.NewSQLRunner(pool, logger)
+	geoResolver, err := geoip.NewResolver(cfg.GeoIPDBPath)
+	if err != nil {
+		logger.Warn().Err(err).Msg("failed to initialize geoip resolver")
+	}
 	return &App{
 		Config:         cfg,
 		Logger:         logger,
 		DB:             pool,
 		SQL:            runner,
+		GeoIPResolver:  geoResolver,
 		GoogleVerifier: googleauth.NewVerifier(cfg.GoogleIssuer, cfg.GoogleClientID),
 		PromptEnhancer: prompt.NewStaticEnhancer(),
 		ImageProviders: map[string]image.Generator{

@@ -11,26 +11,36 @@ type localeKey string
 
 const LocaleKey localeKey = "locale"
 
-func I18N(defaultLocale string) func(http.Handler) http.Handler {
+// CountryLookup resolves ISO country codes for an IP address.
+type CountryLookup func(ip string) (string, error)
+
+func I18N(defaultLocale string, lookup CountryLookup) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			locale := detectLocale(r, defaultLocale)
+			locale := detectLocale(r, defaultLocale, lookup)
 			ctx := context.WithValue(r.Context(), LocaleKey, locale)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-func detectLocale(r *http.Request, fallback string) string {
+func detectLocale(r *http.Request, fallback string, lookup CountryLookup) string {
 	if v := r.Header.Get("X-Locale"); v != "" {
 		return normalizeLocale(v)
 	}
 	if v := parseAcceptLanguage(r.Header.Get("Accept-Language")); v != "" {
 		return v
 	}
-	if ip := clientIP(r); ip != "" {
-		if strings.HasPrefix(ip, "103.") {
-			return "id"
+	if lookup != nil {
+		if ip := clientIP(r); ip != "" {
+			if country, err := lookup(ip); err == nil {
+				if strings.EqualFold(country, "ID") {
+					return "id"
+				}
+				if country != "" {
+					return "en"
+				}
+			}
 		}
 	}
 	if fallback != "" {
