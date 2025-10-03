@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"server/internal/providers/video"
+	"server/internal/domain/jsoncfg"
 	"server/internal/sqlinline"
 
 	"github.com/go-chi/chi/v5"
@@ -14,6 +14,7 @@ import (
 type videoGenerateRequest struct {
 	Provider string `json:"provider"`
 	Prompt   string `json:"prompt"`
+	Locale   string `json:"locale"`
 }
 
 func (a *App) VideosGenerate(w http.ResponseWriter, r *http.Request) {
@@ -30,27 +31,26 @@ func (a *App) VideosGenerate(w http.ResponseWriter, r *http.Request) {
 	if req.Provider == "" {
 		req.Provider = "veo2"
 	}
-	generator, ok := a.VideoProviders[req.Provider]
-	if !ok {
+	if _, ok := a.VideoProviders[req.Provider]; !ok {
 		a.error(w, http.StatusBadRequest, "bad_request", "unsupported provider")
 		return
 	}
-	promptJSON, _ := json.Marshal(map[string]any{"prompt": req.Prompt})
+	promptPayload := map[string]any{
+		"version": "2024-06-01",
+		"prompt":  req.Prompt,
+	}
+	if req.Locale != "" {
+		promptPayload["locale"] = req.Locale
+	}
+	promptJSON := jsoncfg.MustMarshal(promptPayload)
 	row := a.SQL.QueryRow(r.Context(), sqlinline.QEnqueueVideoJob, userID, promptJSON, req.Provider)
 	var jobID string
-	if err := row.Scan(&jobID); err != nil {
+	var remaining int
+	if err := row.Scan(&jobID, &remaining); err != nil {
 		a.error(w, http.StatusInternalServerError, "internal", "failed to queue video job")
 		return
 	}
-	asset, err := generator.Generate(r.Context(), video.GenerateRequest{Prompt: req.Prompt, Provider: req.Provider, RequestID: jobID})
-	status := "SUCCEEDED"
-	if err != nil {
-		status = "FAILED"
-	} else {
-		_, _ = a.SQL.Exec(r.Context(), sqlinline.QInsertAsset, userID, "GENERATED", jobID, asset.URL, asset.Format, int64(5*1024*1024), 1920, 1080, "16:9", json.RawMessage(`{"provider":"video"}`))
-	}
-	_, _ = a.SQL.Exec(r.Context(), sqlinline.QUpdateJobStatus, jobID, status)
-	a.json(w, http.StatusAccepted, jobResponse{JobID: jobID, Status: status, RemainingQuota: 0})
+	a.json(w, http.StatusAccepted, jobResponse{JobID: jobID, Status: "QUEUED", RemainingQuota: remaining})
 }
 
 func (a *App) VideoStatus(w http.ResponseWriter, r *http.Request) {
