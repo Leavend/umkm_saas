@@ -15,10 +15,12 @@ require (
 
 replace github.com/jackc/pgx/v5 => ./internal/stubs/pgx
 
-replace github.com/rs/zerolog => ./internal/stubs/zerolog
+replace github.com/jackc/pgx/v5/pgconn => ./internal/stubs/pgx/pgconn
+
+replace github.com/jackc/pgx/v5/pgxpool => ./internal/stubs/pgx/pgxpool
 
 replace github.com/lib/pq => ./internal/stubs/libpq
 
-replace github.com/pressly/goose/v3 => ./internal/stubs/goose
+replace github.com/rs/zerolog => ./internal/stubs/zerolog
 
 replace github.com/oschwald/geoip2-golang => ./internal/stubs/geoip2

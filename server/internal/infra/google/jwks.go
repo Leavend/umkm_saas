@@ -71,7 +71,7 @@ func (v *Verifier) VerifyIDToken(ctx context.Context, token string) (map[string]
 	if iss, _ := payload["iss"].(string); iss != v.issuer {
 		return nil, errors.New("invalid issuer")
 	}
-	if aud, _ := payload["aud"].(string); aud != v.clientID {
+	if !audienceMatches(payload["aud"], v.clientID) {
 		return nil, errors.New("invalid audience")
 	}
 	if exp, ok := payload["exp"].(float64); ok {
@@ -208,4 +208,24 @@ func parseJWT(token string) (map[string]any, map[string]any, []byte, string, err
 		return nil, nil, nil, "", err
 	}
 	return header, payload, signature, parts[0] + "." + parts[1], nil
+}
+
+func audienceMatches(aud any, clientID string) bool {
+	switch v := aud.(type) {
+	case string:
+		return v == clientID
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok && s == clientID {
+				return true
+			}
+		}
+	case []string:
+		for _, item := range v {
+			if item == clientID {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -24,6 +24,7 @@ upserted as (
                 'google_locale', (select locale from incoming)
             ), now(), now())
     on conflict (email) do update set
+        clerk_user_id = excluded.clerk_user_id,
         name = excluded.name,
         avatar_url = excluded.avatar_url,
         locale_pref = excluded.locale_pref,
@@ -50,11 +51,19 @@ upserted as (
         )
     returning id, plan, properties
 ),
+target_user as (
+    select u.id, u.plan, u.properties from upserted u
+    union all
+    select existing.id, existing.plan, existing.properties
+    from users existing
+    where existing.email = (select email from incoming)
+    limit 1
+),
 linked as (
     insert into external_accounts (id, user_id, provider, external_user_id, properties, created_at, updated_at)
     values (
         gen_random_uuid(),
-        (select id from upserted),
+        (select id from target_user),
         'google',
         (select google_sub from incoming),
         jsonb_build_object(
@@ -71,10 +80,11 @@ linked as (
         user_id = excluded.user_id,
         updated_at = now(),
         properties = excluded.properties
-    returning user_id
+    returning 1
 )
-select u.id, u.plan, u.properties
-from upserted u;
+select t.id, t.plan, t.properties
+from target_user t
+left join linked l on true;
 `
 
 const QSelectUserByID = `--sql 1239018e-4f5f-46a0-8f0d-81b2a3a5f0f8
