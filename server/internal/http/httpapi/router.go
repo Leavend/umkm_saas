@@ -15,7 +15,12 @@ func NewRouter(app *handlers.App) http.Handler {
 
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Logger(app.Logger))
-	r.Use(middleware.I18N("en"))
+
+	var geoLookup middleware.CountryLookup
+	if app.GeoIPResolver != nil {
+		geoLookup = app.GeoIPResolver.CountryCode
+	}
+	r.Use(middleware.I18N("en", geoLookup))
 	r.Use(middleware.CORS([]string{"http://localhost:3000", "https://script.google.com"}))
 	r.Use(middleware.RateLimit(app.Config.RateLimitPerMin, time.Minute))
 

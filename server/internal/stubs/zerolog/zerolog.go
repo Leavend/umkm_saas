@@ -93,6 +93,9 @@ func (l Logger) newEvent(level Level) *Event {
 // Info starts an info-level event.
 func (l Logger) Info() *Event { return l.newEvent(InfoLevel) }
 
+// Warn starts a warn-level event.
+func (l Logger) Warn() *Event { return l.newEvent(InfoLevel) }
+
 // Error starts an error-level event.
 func (l Logger) Error() *Event { return l.newEvent(InfoLevel) }
 
