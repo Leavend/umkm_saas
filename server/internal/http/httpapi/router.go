@@ -21,6 +21,8 @@ func NewRouter(app *handlers.App) http.Handler {
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Get("/healthz", app.Health)
+		r.Get("/openapi.json", app.OpenAPIJSON)
+		r.Get("/docs", app.OpenAPIDocs)
 
 		r.Post("/auth/google/verify", app.AuthGoogleVerify)
 		r.With(middleware.AuthJWT(app.JWTSecret)).Get("/me", app.Me)
