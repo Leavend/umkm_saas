@@ -73,6 +73,7 @@ const QSelectJobStatus = `--sql 8f12e6f8-812e-4c0d-bf9a-57f6318c12fb
 select id, user_id, task_type, status, provider, quantity, aspect_ratio, created_at, updated_at, properties
 from generation_requests
 where id = $1::uuid
+  and user_id = $2::uuid
 limit 1;
 `
 
@@ -80,5 +81,6 @@ const QSelectJobAssets = `--sql 2ad63a52-99e0-4f3d-b0c8-34b18f81c979
 select id, storage_key, mime, bytes, width, height, aspect_ratio, properties, created_at
 from assets
 where request_id = $1::uuid
+  and user_id = $2::uuid
 order by created_at asc;
 `
