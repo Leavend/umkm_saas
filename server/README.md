@@ -11,6 +11,9 @@ Backend service for "Food Photography Naik Kelas" that exposes REST API with inl
 ```bash
 cp .env.example .env
 # edit DATABASE_URL, JWT_SECRET, GOOGLE_CLIENT_ID, GOOGLE_ISSUER, STORAGE_BASE_URL
+# download Go modules (requires internet access)
+go mod tidy
+# prepare database schema
 make migrate
 ```
 
@@ -19,6 +22,12 @@ make migrate
 make run   # starts HTTP API on $PORT (default 8080)
 make worker # starts background worker processing generation jobs
 ```
+
+> **Important:** The application talks to a real PostgreSQL instance via
+> `pgx/v5`. Ensure the database referenced in `DATABASE_URL` is reachable and
+> already has the required extensions (`pgcrypto`) enabled before launching the
+> services. When developing offline, make sure the dependencies are cached or
+> vendored locally prior to running the commands above.
 
 ## Verification
 ```bash
