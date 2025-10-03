@@ -3,6 +3,7 @@ package middleware
 import (
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -39,11 +40,25 @@ func RateLimit(limit int, per time.Duration) func(http.Handler) http.Handler {
 
 func clientIPForRateLimit(r *http.Request) string {
 	if xf := r.Header.Get("X-Forwarded-For"); xf != "" {
-		return xf
+		for _, part := range strings.Split(xf, ",") {
+			ip := strings.TrimSpace(part)
+			if ip == "" {
+				continue
+			}
+			if net.ParseIP(ip) != nil {
+				return ip
+			}
+		}
 	}
+
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
+	if err == nil {
+		if net.ParseIP(host) != nil {
+			return host
+		}
+	} else if net.ParseIP(r.RemoteAddr) != nil {
 		return r.RemoteAddr
 	}
-	return host
+
+	return r.RemoteAddr
 }
