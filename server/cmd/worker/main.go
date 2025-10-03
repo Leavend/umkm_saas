@@ -15,9 +15,6 @@ import (
 	"server/internal/providers/image"
 	videoprovider "server/internal/providers/video"
 	"server/internal/sqlinline"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/rs/zerolog"
 )
 
 const (
@@ -46,7 +43,7 @@ type job struct {
 type jobWorker struct {
 	ctx            context.Context
 	runner         *infra.SQLRunner
-	logger         zerolog.Logger
+	logger         infra.Logger
 	imageProviders map[string]image.Generator
 	videoProviders map[string]videoprovider.Generator
 }
@@ -149,7 +146,7 @@ func (w *jobWorker) claimJob() (job, error) {
 	row := w.runner.QueryRow(w.ctx, sqlinline.QWorkerClaimJob)
 	var j job
 	if err := row.Scan(&j.ID, &j.UserID, &j.TaskType, &j.Provider, &j.Quantity, &j.Aspect, &j.Prompt); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if infra.IsNoRows(err) {
 			return job{}, errNoJobAvailable
 		}
 		return job{}, err
