@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"server/internal/domain/jsoncfg"
+	"server/internal/middleware"
 	"server/internal/sqlinline"
 	"server/pkg/zip"
 
@@ -38,11 +39,23 @@ func (a *App) ImagesGenerate(w http.ResponseWriter, r *http.Request) {
 		a.error(w, http.StatusBadRequest, "bad_request", "invalid payload")
 		return
 	}
+	locale := middleware.LocaleFromContext(r.Context())
+	req.Prompt.Normalize(locale)
 	if req.Quantity <= 0 {
-		req.Quantity = 1
+		req.Quantity = req.Prompt.Quantity
+		if req.Quantity <= 0 {
+			req.Quantity = jsoncfg.DefaultPromptQuantity
+		}
 	}
+	if req.Quantity > jsoncfg.MaxPromptQuantity {
+		req.Quantity = jsoncfg.MaxPromptQuantity
+	}
+	req.Prompt.Quantity = req.Quantity
 	if req.AspectRatio == "" {
-		req.AspectRatio = "1:1"
+		req.AspectRatio = req.Prompt.AspectRatio
+		if req.AspectRatio == "" {
+			req.AspectRatio = jsoncfg.DefaultPromptAspectRatio
+		}
 	}
 	provider := req.Provider
 	if provider == "" {
