@@ -2,6 +2,7 @@ package infra
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"regexp"
 	"strings"
@@ -121,5 +122,8 @@ var _ SQLExecutor = (*SQLRunner)(nil)
 // no rows. It mirrors pgx.ErrNoRows but keeps the dependency contained within
 // the infra package so that callers do not need to import pgx directly.
 func IsNoRows(err error) bool {
-	return errors.Is(err, pgx.ErrNoRows)
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows)
 }
