@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"server/internal/infra"
 	"server/internal/infra/geoip"
@@ -35,6 +36,22 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 	if err != nil {
 		logger.Warn().Err(err).Msg("failed to initialize geoip resolver")
 	}
+	var promptProvider prompt.Enhancer = prompt.NewStaticEnhancer()
+	if cfg.GeminiAPIKey != "" {
+		enhancer, err := prompt.NewGeminiEnhancer(prompt.GeminiOptions{
+			APIKey:     cfg.GeminiAPIKey,
+			Model:      cfg.GeminiModel,
+			BaseURL:    cfg.GeminiBaseURL,
+			HTTPClient: &http.Client{Timeout: 15 * time.Second},
+			Fallback:   promptProvider,
+		})
+		if err != nil {
+			logger.Warn().Err(err).Msg("failed to initialize gemini enhancer, falling back to static prompts")
+		} else {
+			promptProvider = enhancer
+		}
+	}
+
 	return &App{
 		Config:         cfg,
 		Logger:         logger,
@@ -42,7 +59,7 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 		SQL:            runner,
 		GeoIPResolver:  geoResolver,
 		GoogleVerifier: googleauth.NewVerifier(cfg.GoogleIssuer, cfg.GoogleClientID),
-		PromptEnhancer: prompt.NewStaticEnhancer(),
+		PromptEnhancer: promptProvider,
 		ImageProviders: map[string]image.Generator{
 			"gemini":     image.NewNanoBanana(),
 			"nanobanana": image.NewNanoBanana(),

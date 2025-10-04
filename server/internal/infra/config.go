@@ -17,6 +17,9 @@ type Config struct {
 	GeoIPDBPath      string
 	GoogleClientID   string
 	GoogleIssuer     string
+	GeminiAPIKey     string
+	GeminiModel      string
+	GeminiBaseURL    string
 	HTTPReadTimeout  time.Duration
 	HTTPWriteTimeout time.Duration
 	HTTPIdleTimeout  time.Duration
@@ -34,6 +37,9 @@ func LoadConfig() (*Config, error) {
 		GeoIPDBPath:      os.Getenv("GEOIP_DB_PATH"),
 		GoogleClientID:   os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleIssuer:     getEnv("GOOGLE_ISSUER", "https://accounts.google.com"),
+		GeminiAPIKey:     os.Getenv("GEMINI_API_KEY"),
+		GeminiModel:      getEnv("GEMINI_MODEL", "gemini-1.5-flash"),
+		GeminiBaseURL:    getEnv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"),
 		HTTPReadTimeout:  time.Second * time.Duration(getEnvInt("HTTP_READ_TIMEOUT_SECONDS", 15)),
 		HTTPWriteTimeout: time.Second * time.Duration(getEnvInt("HTTP_WRITE_TIMEOUT_SECONDS", 30)),
 		HTTPIdleTimeout:  time.Second * time.Duration(getEnvInt("HTTP_IDLE_TIMEOUT_SECONDS", 60)),
