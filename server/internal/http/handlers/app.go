@@ -1,10 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
+	"time"
 
 	"server/internal/infra"
+	"server/internal/infra/credentials"
 	"server/internal/infra/geoip"
 	googleauth "server/internal/infra/google"
 	"server/internal/middleware"
@@ -35,6 +39,53 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 	if err != nil {
 		logger.Warn().Err(err).Msg("failed to initialize geoip resolver")
 	}
+	credentialStore := credentials.NewStore(runner)
+	var geminiKey string
+	ctxLoad, cancelLoad := context.WithTimeout(context.Background(), 2*time.Second)
+	keyFromDB, err := credentialStore.GeminiAPIKey(ctxLoad)
+	cancelLoad()
+	if err != nil {
+		logger.Warn().Err(err).Msg("failed to load gemini api key from database")
+	}
+	envGeminiKey := strings.TrimSpace(cfg.GeminiAPIKey)
+	if envGeminiKey != "" {
+		geminiKey = envGeminiKey
+		if keyFromDB == "" {
+			ctxPersist, cancelPersist := context.WithTimeout(context.Background(), 2*time.Second)
+			if err := credentialStore.SetGeminiAPIKey(ctxPersist, geminiKey); err != nil {
+				logger.Warn().Err(err).Msg("failed to persist gemini api key to database")
+			}
+			cancelPersist()
+		}
+	} else {
+		geminiKey = strings.TrimSpace(keyFromDB)
+	}
+
+	var promptProvider prompt.Enhancer = prompt.NewStaticEnhancer()
+	if geminiKey != "" {
+		enhancer, err := prompt.NewGeminiEnhancer(prompt.GeminiOptions{
+			APIKey:     geminiKey,
+			Model:      cfg.GeminiModel,
+			BaseURL:    cfg.GeminiBaseURL,
+			HTTPClient: &http.Client{Timeout: 15 * time.Second},
+			Fallback:   promptProvider,
+			OnFallback: func(reason string, err error) {
+				evt := logger.Warn().Str("provider", "gemini").Str("reason", reason)
+				if err != nil {
+					evt = evt.Err(err)
+				}
+				evt.Msg("gemini enhancer fallback")
+			},
+		})
+		if err != nil {
+			logger.Warn().Err(err).Msg("failed to initialize gemini enhancer, falling back to static prompts")
+		} else {
+			promptProvider = enhancer
+		}
+	} else {
+		logger.Warn().Msg("gemini api key missing; prompt enhancer will use static provider")
+	}
+
 	return &App{
 		Config:         cfg,
 		Logger:         logger,
@@ -42,7 +93,7 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 		SQL:            runner,
 		GeoIPResolver:  geoResolver,
 		GoogleVerifier: googleauth.NewVerifier(cfg.GoogleIssuer, cfg.GoogleClientID),
-		PromptEnhancer: prompt.NewStaticEnhancer(),
+		PromptEnhancer: promptProvider,
 		ImageProviders: map[string]image.Generator{
 			"gemini":     image.NewNanoBanana(),
 			"nanobanana": image.NewNanoBanana(),

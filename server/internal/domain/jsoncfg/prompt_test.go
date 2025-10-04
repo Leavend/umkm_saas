@@ -51,3 +51,36 @@ func TestPromptJSONNormalizeMinimumQuantity(t *testing.T) {
 		t.Fatalf("Quantity = %d, want %d", p.Quantity, DefaultPromptQuantity)
 	}
 }
+
+func TestPromptJSONValidate(t *testing.T) {
+	prompt := PromptJSON{
+		Version:      DefaultPromptVersion,
+		Title:        "Nasi Goreng Premium",
+		ProductType:  "food",
+		Style:        "elegan",
+		Background:   "marble",
+		Instructions: "Gunakan lighting lembut",
+		Watermark: WatermarkConfig{
+			Enabled:  true,
+			Text:     "Brand",
+			Position: "bottom-right",
+		},
+		AspectRatio: "1:1",
+		Quantity:    1,
+	}
+	if err := prompt.Validate(); err != nil {
+		t.Fatalf("Validate() unexpected error: %v", err)
+	}
+
+	prompt.AspectRatio = "2:1"
+	if err := prompt.Validate(); err == nil {
+		t.Fatalf("Validate() expected error for invalid aspect ratio")
+	}
+
+	prompt.AspectRatio = "1:1"
+	prompt.Watermark.Enabled = true
+	prompt.Watermark.Text = ""
+	if err := prompt.Validate(); err == nil {
+		t.Fatalf("Validate() expected error when watermark text missing")
+	}
+}

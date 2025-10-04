@@ -7,11 +7,9 @@ import (
 	"github.com/google/uuid"
 )
 
-type contextKey string
+type requestIDContextKey struct{}
 
-const (
-	requestIDKey contextKey = "request_id"
-)
+var requestIDKey = requestIDContextKey{}
 
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
