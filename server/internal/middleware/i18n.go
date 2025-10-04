@@ -32,7 +32,7 @@ func detectLocale(r *http.Request, fallback string, lookup CountryLookup) string
 		return v
 	}
 	if lookup != nil {
-		if ip := clientIP(r); ip != "" {
+		if ip := ClientIP(r); ip != "" {
 			if country, err := lookup(ip); err == nil {
 				if strings.EqualFold(country, "ID") {
 					return "id"
@@ -69,7 +69,11 @@ func normalizeLocale(locale string) string {
 	return "en"
 }
 
-func clientIP(r *http.Request) string {
+// ClientIP returns the best-effort client IP address for the request.
+func ClientIP(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
 	if xf := r.Header.Get("X-Forwarded-For"); xf != "" {
 		parts := strings.Split(xf, ",")
 		if len(parts) > 0 {
