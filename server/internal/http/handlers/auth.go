@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"time"
 
@@ -56,7 +55,8 @@ func (a *App) AuthGoogleVerify(w http.ResponseWriter, r *http.Request) {
 	if locale == "" {
 		locale = "en"
 	}
-	row := a.SQL.QueryRow(r.Context(), sqlinline.QUpsertGoogleUser, sub, email, name, picture, locale)
+	ipCountry := resolveIPCountry(r, a.GeoIPResolver)
+	row := a.SQL.QueryRow(r.Context(), sqlinline.QUpsertGoogleUser, sub, email, name, picture, locale, ipCountry)
 	var userID string
 	var plan string
 	var propsBytes []byte
@@ -140,15 +140,27 @@ func extractQuota(b []byte) (map[string]any, int, int) {
 	return props, quotaDaily, quotaUsed
 }
 
+type countryResolver interface {
+	CountryCode(ip string) (string, error)
+}
+
+func resolveIPCountry(r *http.Request, resolver countryResolver) string {
+	if country := middleware.CountryFromContext(r.Context()); country != "" {
+		return country
+	}
+	var lookup middleware.CountryLookup
+	if resolver != nil {
+		lookup = resolver.CountryCode
+	}
+	return middleware.ResolveCountry(r, lookup)
+}
+
 func (a *App) PromptClear(w http.ResponseWriter, r *http.Request) {
 	userID := a.currentUserID(r)
 	if userID == "" {
 		a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
 		return
 	}
-	_, err := a.SQL.Exec(r.Context(), sqlinline.QInsertUsageEvent, userID, nil, "PROMPT_CLEAR", true, 0, json.RawMessage(`{"action":"clear"}`))
-	if err != nil && !errors.Is(err, context.Canceled) {
-		a.Logger.Error().Err(err).Msg("log usage failed")
-	}
+	a.logUsageEvent(r, userID, "PROMPT_CLEAR", true, 0, map[string]any{"action": "clear"})
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -7,12 +7,14 @@ with incoming as (
         $2::text as email,
         $3::text as name,
         $4::text as picture,
-        $5::text as locale
+        $5::text as locale,
+        $6::text as country
 ),
 upserted as (
-    insert into users (id, clerk_user_id, email, name, avatar_url, plan, locale_pref, google_sub, properties, created_at, updated_at)
+    insert into users (id, clerk_user_id, email, name, avatar_url, plan, locale_pref, google_sub, last_ip_country, last_seen_at, properties, created_at, updated_at)
     values (gen_random_uuid(), (select google_sub from incoming), (select email from incoming), (select name from incoming),
             (select picture from incoming), 'free', (select locale from incoming), (select google_sub from incoming),
+            nullif((select country from incoming), ''), now(),
             jsonb_build_object(
                 'quota_daily', 2,
                 'quota_used_today', 0,
@@ -29,6 +31,8 @@ upserted as (
         avatar_url = excluded.avatar_url,
         locale_pref = excluded.locale_pref,
         google_sub = excluded.google_sub,
+        last_ip_country = coalesce(nullif((select country from incoming), ''), users.last_ip_country),
+        last_seen_at = now(),
         updated_at = now(),
         properties = jsonb_set(
             jsonb_set(
