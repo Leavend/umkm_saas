@@ -40,16 +40,25 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 		logger.Warn().Err(err).Msg("failed to initialize geoip resolver")
 	}
 	credentialStore := credentials.NewStore(runner)
-	geminiKey := strings.TrimSpace(cfg.GeminiAPIKey)
-	if geminiKey == "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		keyFromDB, err := credentialStore.GeminiAPIKey(ctx)
-		if err != nil {
-			logger.Warn().Err(err).Msg("failed to load gemini api key from database")
-		} else {
-			geminiKey = keyFromDB
+	var geminiKey string
+	ctxLoad, cancelLoad := context.WithTimeout(context.Background(), 2*time.Second)
+	keyFromDB, err := credentialStore.GeminiAPIKey(ctxLoad)
+	cancelLoad()
+	if err != nil {
+		logger.Warn().Err(err).Msg("failed to load gemini api key from database")
+	}
+	envGeminiKey := strings.TrimSpace(cfg.GeminiAPIKey)
+	if envGeminiKey != "" {
+		geminiKey = envGeminiKey
+		if keyFromDB == "" {
+			ctxPersist, cancelPersist := context.WithTimeout(context.Background(), 2*time.Second)
+			if err := credentialStore.SetGeminiAPIKey(ctxPersist, geminiKey); err != nil {
+				logger.Warn().Err(err).Msg("failed to persist gemini api key to database")
+			}
+			cancelPersist()
 		}
+	} else {
+		geminiKey = strings.TrimSpace(keyFromDB)
 	}
 
 	var promptProvider prompt.Enhancer = prompt.NewStaticEnhancer()
@@ -60,6 +69,13 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 			BaseURL:    cfg.GeminiBaseURL,
 			HTTPClient: &http.Client{Timeout: 15 * time.Second},
 			Fallback:   promptProvider,
+			OnFallback: func(reason string, err error) {
+				evt := logger.Warn().Str("provider", "gemini").Str("reason", reason)
+				if err != nil {
+					evt = evt.Err(err)
+				}
+				evt.Msg("gemini enhancer fallback")
+			},
 		})
 		if err != nil {
 			logger.Warn().Err(err).Msg("failed to initialize gemini enhancer, falling back to static prompts")

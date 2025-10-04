@@ -20,14 +20,16 @@ type GeminiOptions struct {
 	BaseURL    string
 	HTTPClient *http.Client
 	Fallback   Enhancer
+	OnFallback func(reason string, err error)
 }
 
 type GeminiEnhancer struct {
-	apiKey   string
-	model    string
-	baseURL  string
-	client   *http.Client
-	fallback Enhancer
+	apiKey     string
+	model      string
+	baseURL    string
+	client     *http.Client
+	fallback   Enhancer
+	onFallback func(reason string, err error)
 }
 
 const (
@@ -98,17 +100,18 @@ func NewGeminiEnhancer(opts GeminiOptions) (*GeminiEnhancer, error) {
 		client = &http.Client{Timeout: geminiDefaultTimeout}
 	}
 	return &GeminiEnhancer{
-		apiKey:   opts.APIKey,
-		model:    model,
-		baseURL:  baseURL,
-		client:   client,
-		fallback: opts.Fallback,
+		apiKey:     opts.APIKey,
+		model:      model,
+		baseURL:    baseURL,
+		client:     client,
+		fallback:   opts.Fallback,
+		onFallback: opts.OnFallback,
 	}, nil
 }
 
 func (g *GeminiEnhancer) Enhance(ctx context.Context, req EnhanceRequest) (*EnhanceResponse, error) {
 	if g.apiKey == "" {
-		return g.useFallback(ctx, req)
+		return g.useFallback(ctx, req, "missing_api_key", nil)
 	}
 	payload := geminiRequest{
 		Contents: []geminiContent{{
@@ -125,36 +128,36 @@ func (g *GeminiEnhancer) Enhance(ctx context.Context, req EnhanceRequest) (*Enha
 	}
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
-		return g.useFallback(ctx, req)
+		return g.useFallback(ctx, req, "encode_request", err)
 	}
 	endpoint := g.endpoint()
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &buf)
 	if err != nil {
-		return g.useFallback(ctx, req)
+		return g.useFallback(ctx, req, "build_request", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-goog-api-key", g.apiKey)
 	resp, err := g.client.Do(httpReq)
 	if err != nil {
-		return g.useFallback(ctx, req)
+		return g.useFallback(ctx, req, "http_request", err)
 	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
 	if resp.StatusCode >= 300 {
-		return g.useFallback(ctx, req)
+		return g.useFallback(ctx, req, fmt.Sprintf("http_%d", resp.StatusCode), fmt.Errorf("gemini status %d", resp.StatusCode))
 	}
 	var out geminiResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return g.useFallback(ctx, req)
+		return g.useFallback(ctx, req, "decode_response", err)
 	}
 	text := g.extractText(out)
 	if text == "" {
-		return g.useFallback(ctx, req)
+		return g.useFallback(ctx, req, "empty_response", errors.New("empty response"))
 	}
 	parsed, err := parseGeminiPayload[geminiEnhancePayload](text)
 	if err != nil {
-		return g.useFallback(ctx, req)
+		return g.useFallback(ctx, req, "parse_payload", err)
 	}
 	response := &EnhanceResponse{
 		Title:       coalesce(parsed.Title, req.Prompt.Title),
@@ -184,7 +187,7 @@ func (g *GeminiEnhancer) Enhance(ctx context.Context, req EnhanceRequest) (*Enha
 
 func (g *GeminiEnhancer) Random(ctx context.Context, locale string) ([]EnhanceResponse, error) {
 	if g.apiKey == "" {
-		return g.useFallbackRandom(ctx, locale)
+		return g.useFallbackRandom(ctx, locale, "missing_api_key", nil)
 	}
 	payload := geminiRequest{
 		Contents: []geminiContent{{
@@ -201,39 +204,39 @@ func (g *GeminiEnhancer) Random(ctx context.Context, locale string) ([]EnhanceRe
 	}
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
-		return g.useFallbackRandom(ctx, locale)
+		return g.useFallbackRandom(ctx, locale, "encode_request", err)
 	}
 	endpoint := g.endpoint()
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &buf)
 	if err != nil {
-		return g.useFallbackRandom(ctx, locale)
+		return g.useFallbackRandom(ctx, locale, "build_request", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-goog-api-key", g.apiKey)
 	resp, err := g.client.Do(httpReq)
 	if err != nil {
-		return g.useFallbackRandom(ctx, locale)
+		return g.useFallbackRandom(ctx, locale, "http_request", err)
 	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
 	if resp.StatusCode >= 300 {
-		return g.useFallbackRandom(ctx, locale)
+		return g.useFallbackRandom(ctx, locale, fmt.Sprintf("http_%d", resp.StatusCode), fmt.Errorf("gemini status %d", resp.StatusCode))
 	}
 	var out geminiResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return g.useFallbackRandom(ctx, locale)
+		return g.useFallbackRandom(ctx, locale, "decode_response", err)
 	}
 	text := g.extractText(out)
 	if text == "" {
-		return g.useFallbackRandom(ctx, locale)
+		return g.useFallbackRandom(ctx, locale, "empty_response", errors.New("empty response"))
 	}
 	parsed, err := parseGeminiPayload[geminiRandomPayload](text)
 	if err != nil {
-		return g.useFallbackRandom(ctx, locale)
+		return g.useFallbackRandom(ctx, locale, "parse_payload", err)
 	}
 	if len(parsed.Items) == 0 {
-		return g.useFallbackRandom(ctx, locale)
+		return g.useFallbackRandom(ctx, locale, "empty_items", errors.New("no items returned"))
 	}
 	var results []EnhanceResponse
 	for _, item := range parsed.Items {
@@ -266,11 +269,18 @@ func (g *GeminiEnhancer) extractText(resp geminiResponse) string {
 	return ""
 }
 
-func (g *GeminiEnhancer) useFallback(ctx context.Context, req EnhanceRequest) (*EnhanceResponse, error) {
+func (g *GeminiEnhancer) useFallback(ctx context.Context, req EnhanceRequest, reason string, fallbackErr error) (*EnhanceResponse, error) {
+	g.emitFallback(reason, fallbackErr)
 	if g.fallback != nil {
 		res, err := g.fallback.Enhance(ctx, req)
 		if res != nil {
 			res.Provider = staticProviderName
+			if res.Metadata == nil {
+				res.Metadata = map[string]string{}
+			}
+			if reason != "" {
+				res.Metadata["fallback_reason"] = reason
+			}
 		}
 		return res, err
 	}
@@ -278,15 +288,28 @@ func (g *GeminiEnhancer) useFallback(ctx context.Context, req EnhanceRequest) (*
 	res, err := fallback.Enhance(ctx, req)
 	if res != nil {
 		res.Provider = staticProviderName
+		if res.Metadata == nil {
+			res.Metadata = map[string]string{}
+		}
+		if reason != "" {
+			res.Metadata["fallback_reason"] = reason
+		}
 	}
 	return res, err
 }
 
-func (g *GeminiEnhancer) useFallbackRandom(ctx context.Context, locale string) ([]EnhanceResponse, error) {
+func (g *GeminiEnhancer) useFallbackRandom(ctx context.Context, locale string, reason string, fallbackErr error) ([]EnhanceResponse, error) {
+	g.emitFallback(reason, fallbackErr)
 	if g.fallback != nil {
 		items, err := g.fallback.Random(ctx, locale)
 		for i := range items {
 			items[i].Provider = staticProviderName
+			if items[i].Metadata == nil {
+				items[i].Metadata = map[string]string{}
+			}
+			if reason != "" {
+				items[i].Metadata["fallback_reason"] = reason
+			}
 		}
 		return items, err
 	}
@@ -294,8 +317,20 @@ func (g *GeminiEnhancer) useFallbackRandom(ctx context.Context, locale string) (
 	items, err := fallback.Random(ctx, locale)
 	for i := range items {
 		items[i].Provider = staticProviderName
+		if items[i].Metadata == nil {
+			items[i].Metadata = map[string]string{}
+		}
+		if reason != "" {
+			items[i].Metadata["fallback_reason"] = reason
+		}
 	}
 	return items, err
+}
+
+func (g *GeminiEnhancer) emitFallback(reason string, err error) {
+	if g.onFallback != nil {
+		g.onFallback(reason, err)
+	}
 }
 
 func (g *GeminiEnhancer) buildEnhancePrompt(req EnhanceRequest) string {

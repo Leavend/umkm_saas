@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -108,7 +109,13 @@ func (a *App) PromptRandom(w http.ResponseWriter, r *http.Request) {
 	if len(list) > 0 {
 		provider = list[0].Provider
 	}
-	a.logUsageEvent(r, userID, "PROMPT_RANDOM", true, latency, map[string]any{"locale": locale, "provider": provider})
+	props := map[string]any{"locale": locale, "provider": provider}
+	if provider == "static" && len(list) > 0 {
+		if reason := list[0].Metadata["fallback_reason"]; reason != "" {
+			props["fallback_reason"] = reason
+		}
+	}
+	a.logUsageEvent(r, userID, "PROMPT_RANDOM", true, latency, props)
 	a.json(w, http.StatusOK, map[string]any{"items": list, "generated_at": time.Now()})
 }
 
@@ -126,7 +133,9 @@ func (a *App) logUsageEvent(r *http.Request, userID, event string, success bool,
 		props = map[string]any{}
 	}
 	payload := jsoncfg.MustMarshal(props)
-	if _, err := a.SQL.Exec(r.Context(), sqlinline.QInsertUsageEvent, userID, requestID, event, success, latency, payload); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := a.SQL.Exec(ctx, sqlinline.QInsertUsageEvent, userID, requestID, event, success, latency, payload); err != nil {
 		a.Logger.Error().Err(err).Str("event", event).Msg("log usage failed")
 	}
 }
