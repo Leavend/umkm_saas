@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"time"
 
@@ -162,9 +161,6 @@ func (a *App) PromptClear(w http.ResponseWriter, r *http.Request) {
 		a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
 		return
 	}
-	_, err := a.SQL.Exec(r.Context(), sqlinline.QInsertUsageEvent, userID, nil, "PROMPT_CLEAR", true, 0, json.RawMessage(`{"action":"clear"}`))
-	if err != nil && !errors.Is(err, context.Canceled) {
-		a.Logger.Error().Err(err).Msg("log usage failed")
-	}
+	a.logUsageEvent(r, userID, "PROMPT_CLEAR", true, 0, map[string]any{"action": "clear"})
 	w.WriteHeader(http.StatusNoContent)
 }
