@@ -15,16 +15,35 @@ import (
 )
 
 func main() {
-	var keyFlag string
-	flag.StringVar(&keyFlag, "key", "", "Gemini API key (optional if GEMINI_API_KEY is set)")
+	var (
+		keyFlag      string
+		providerFlag string
+	)
+	flag.StringVar(&keyFlag, "key", "", "API key for the selected provider (fallbacks to environment)")
+	flag.StringVar(&providerFlag, "provider", credentials.ProviderGemini, "Prompt provider to configure (gemini or openai)")
 	flag.Parse()
+
+	provider := strings.TrimSpace(strings.ToLower(providerFlag))
+	switch provider {
+	case credentials.ProviderGemini, credentials.ProviderOpenAI:
+	case "":
+		provider = credentials.ProviderGemini
+	default:
+		fmt.Fprintf(os.Stderr, "unsupported provider %q\n", providerFlag)
+		os.Exit(1)
+	}
 
 	key := strings.TrimSpace(keyFlag)
 	if key == "" {
-		key = strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+		switch provider {
+		case credentials.ProviderOpenAI:
+			key = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+		default:
+			key = strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+		}
 	}
 	if key == "" {
-		fmt.Fprintln(os.Stderr, "Gemini API key is required via -key or GEMINI_API_KEY")
+		fmt.Fprintf(os.Stderr, "%s API key is required via -key or environment\n", strings.ToUpper(provider))
 		os.Exit(1)
 	}
 
@@ -44,15 +63,22 @@ func main() {
 	}
 	defer pool.Close()
 
-	logger := infra.NewLogger("cli").With().Str("cmd", "geminikey").Logger()
+	logger := infra.NewLogger("cli").With().Str("cmd", "geminikey").Str("provider", provider).Logger()
 	store := credentials.NewStore(infra.NewSQLRunner(pool, logger))
 
 	ctxExec, cancelExec := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelExec()
-	if err := store.SetGeminiAPIKey(ctxExec, key); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to persist gemini api key: %v\n", err)
+	var persistErr error
+	switch provider {
+	case credentials.ProviderOpenAI:
+		persistErr = store.SetOpenAIAPIKey(ctxExec, key)
+	default:
+		persistErr = store.SetGeminiAPIKey(ctxExec, key)
+	}
+	if persistErr != nil {
+		fmt.Fprintf(os.Stderr, "failed to persist %s api key: %v\n", provider, persistErr)
 		os.Exit(1)
 	}
 
-	fmt.Println("Gemini API key stored successfully")
+	fmt.Printf("%s API key stored successfully\n", strings.ToUpper(provider))
 }

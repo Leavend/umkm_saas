@@ -12,6 +12,7 @@ import (
 
 const (
 	ProviderGemini = "gemini"
+	ProviderOpenAI = "openai"
 )
 
 type Store struct {
@@ -24,6 +25,10 @@ func NewStore(sql infra.SQLExecutor) *Store {
 
 func (s *Store) GeminiAPIKey(ctx context.Context) (string, error) {
 	return s.Token(ctx, ProviderGemini)
+}
+
+func (s *Store) OpenAIAPIKey(ctx context.Context) (string, error) {
+	return s.Token(ctx, ProviderOpenAI)
 }
 
 func (s *Store) Token(ctx context.Context, provider string) (string, error) {
@@ -44,6 +49,14 @@ func (s *Store) SetGeminiAPIKey(ctx context.Context, key string) error {
 		return errors.New("gemini api key is required")
 	}
 	return s.upsert(ctx, ProviderGemini, key, nil)
+}
+
+func (s *Store) SetOpenAIAPIKey(ctx context.Context, key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return errors.New("openai api key is required")
+	}
+	return s.upsert(ctx, ProviderOpenAI, key, nil)
 }
 
 func (s *Store) upsert(ctx context.Context, provider, token string, props map[string]any) error {

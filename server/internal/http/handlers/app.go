@@ -40,37 +40,72 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 		logger.Warn().Err(err).Msg("failed to initialize geoip resolver")
 	}
 	credentialStore := credentials.NewStore(runner)
-	var geminiKey string
-	ctxLoad, cancelLoad := context.WithTimeout(context.Background(), 2*time.Second)
-	keyFromDB, err := credentialStore.GeminiAPIKey(ctxLoad)
-	cancelLoad()
-	if err != nil {
-		logger.Warn().Err(err).Msg("failed to load gemini api key from database")
-	}
-	envGeminiKey := strings.TrimSpace(cfg.GeminiAPIKey)
-	if envGeminiKey != "" {
-		geminiKey = envGeminiKey
-		if keyFromDB == "" {
-			ctxPersist, cancelPersist := context.WithTimeout(context.Background(), 2*time.Second)
-			if err := credentialStore.SetGeminiAPIKey(ctxPersist, geminiKey); err != nil {
-				logger.Warn().Err(err).Msg("failed to persist gemini api key to database")
-			}
-			cancelPersist()
+	staticEnhancer := prompt.NewStaticEnhancer()
+	var promptProvider prompt.Enhancer = staticEnhancer
+
+	loadKey := func(envValue string, getter func(context.Context) (string, error), setter func(context.Context, string) error, provider string) string {
+		ctxLoad, cancelLoad := context.WithTimeout(context.Background(), 2*time.Second)
+		keyFromDB, err := getter(ctxLoad)
+		cancelLoad()
+		if err != nil {
+			logger.Warn().Err(err).Str("provider", provider).Msg("failed to load api key from database")
 		}
-	} else {
-		geminiKey = strings.TrimSpace(keyFromDB)
+		envValue = strings.TrimSpace(envValue)
+		if envValue != "" {
+			if keyFromDB == "" && setter != nil {
+				ctxPersist, cancelPersist := context.WithTimeout(context.Background(), 2*time.Second)
+				if err := setter(ctxPersist, envValue); err != nil {
+					logger.Warn().Err(err).Str("provider", provider).Msg("failed to persist api key to database")
+				}
+				cancelPersist()
+			}
+			return envValue
+		}
+		return strings.TrimSpace(keyFromDB)
 	}
 
-	var promptProvider prompt.Enhancer = prompt.NewStaticEnhancer()
-	if geminiKey != "" {
+	providerChoice := strings.TrimSpace(strings.ToLower(cfg.PromptProvider))
+	switch providerChoice {
+	case credentials.ProviderOpenAI:
+		openaiKey := loadKey(cfg.OpenAIAPIKey, credentialStore.OpenAIAPIKey, credentialStore.SetOpenAIAPIKey, credentials.ProviderOpenAI)
+		if openaiKey == "" {
+			logger.Warn().Str("provider", credentials.ProviderOpenAI).Msg("openai api key missing; prompt enhancer will use static provider")
+			break
+		}
+		enhancer, err := prompt.NewOpenAIEnhancer(prompt.OpenAIOptions{
+			APIKey:       openaiKey,
+			Model:        cfg.OpenAIModel,
+			BaseURL:      cfg.OpenAIBaseURL,
+			Organization: cfg.OpenAIOrg,
+			HTTPClient:   &http.Client{Timeout: 15 * time.Second},
+			Fallback:     staticEnhancer,
+			OnFallback: func(reason string, err error) {
+				evt := logger.Warn().Str("provider", credentials.ProviderOpenAI).Str("reason", reason)
+				if err != nil {
+					evt = evt.Err(err)
+				}
+				evt.Msg("openai enhancer fallback")
+			},
+		})
+		if err != nil {
+			logger.Warn().Err(err).Str("provider", credentials.ProviderOpenAI).Msg("failed to initialize openai enhancer, falling back to static prompts")
+		} else {
+			promptProvider = enhancer
+		}
+	case credentials.ProviderGemini, "":
+		geminiKey := loadKey(cfg.GeminiAPIKey, credentialStore.GeminiAPIKey, credentialStore.SetGeminiAPIKey, credentials.ProviderGemini)
+		if geminiKey == "" {
+			logger.Warn().Str("provider", credentials.ProviderGemini).Msg("gemini api key missing; prompt enhancer will use static provider")
+			break
+		}
 		enhancer, err := prompt.NewGeminiEnhancer(prompt.GeminiOptions{
 			APIKey:     geminiKey,
 			Model:      cfg.GeminiModel,
 			BaseURL:    cfg.GeminiBaseURL,
 			HTTPClient: &http.Client{Timeout: 15 * time.Second},
-			Fallback:   promptProvider,
+			Fallback:   staticEnhancer,
 			OnFallback: func(reason string, err error) {
-				evt := logger.Warn().Str("provider", "gemini").Str("reason", reason)
+				evt := logger.Warn().Str("provider", credentials.ProviderGemini).Str("reason", reason)
 				if err != nil {
 					evt = evt.Err(err)
 				}
@@ -78,12 +113,14 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 			},
 		})
 		if err != nil {
-			logger.Warn().Err(err).Msg("failed to initialize gemini enhancer, falling back to static prompts")
+			logger.Warn().Err(err).Str("provider", credentials.ProviderGemini).Msg("failed to initialize gemini enhancer, falling back to static prompts")
 		} else {
 			promptProvider = enhancer
 		}
-	} else {
-		logger.Warn().Msg("gemini api key missing; prompt enhancer will use static provider")
+	case "static":
+		logger.Info().Msg("prompt provider configured as static; dynamic prompts disabled")
+	default:
+		logger.Warn().Str("provider", providerChoice).Msg("unknown prompt provider; using static prompts")
 	}
 
 	return &App{

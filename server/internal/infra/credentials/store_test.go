@@ -94,3 +94,46 @@ func TestSetGeminiAPIKeyEmpty(t *testing.T) {
 		t.Fatal("expected error for empty key")
 	}
 }
+
+func TestOpenAIAPIKey(t *testing.T) {
+	store := NewStore(&stubExecutor{token: " sk-test "})
+	key, err := store.OpenAIAPIKey(context.Background())
+	if err != nil {
+		t.Fatalf("OpenAIAPIKey error: %v", err)
+	}
+	if key != "sk-test" {
+		t.Fatalf("expected sk-test, got %q", key)
+	}
+}
+
+func TestOpenAIAPIKey_NoRows(t *testing.T) {
+	store := NewStore(&stubExecutor{err: pgx.ErrNoRows})
+	key, err := store.OpenAIAPIKey(context.Background())
+	if err != nil {
+		t.Fatalf("OpenAIAPIKey error: %v", err)
+	}
+	if key != "" {
+		t.Fatalf("expected empty key, got %q", key)
+	}
+}
+
+func TestSetOpenAIAPIKey(t *testing.T) {
+	exec := &stubExecutor{}
+	store := NewStore(exec)
+	if err := store.SetOpenAIAPIKey(context.Background(), "secret"); err != nil {
+		t.Fatalf("SetOpenAIAPIKey error: %v", err)
+	}
+	if len(exec.exec.args) != 3 {
+		t.Fatalf("expected 3 args, got %d", len(exec.exec.args))
+	}
+	if v, ok := exec.exec.args[1].(string); !ok || v != "secret" {
+		t.Fatalf("expected secret argument, got %T %v", exec.exec.args[1], exec.exec.args[1])
+	}
+}
+
+func TestSetOpenAIAPIKeyEmpty(t *testing.T) {
+	store := NewStore(&stubExecutor{})
+	if err := store.SetOpenAIAPIKey(context.Background(), ""); err == nil {
+		t.Fatal("expected error for empty key")
+	}
+}
