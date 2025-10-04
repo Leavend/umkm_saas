@@ -19,6 +19,9 @@ make migrate
 GEMINI_API_KEY=your-google-ai-key make set-gemini-key
 # or switch to OpenAI by updating PROMPT_PROVIDER=openai and setting the key
 OPENAI_API_KEY=your-openai-key make set-openai-key
+# optional: override OPENAI_MODEL with a free tier model (defaults to gpt-4o-mini).
+# aliases such as "gpt-5 thinking" map to gpt-4o-mini automatically, and any
+# unsupported value also falls back to this free model tier.
 ```
 
 ## Run services

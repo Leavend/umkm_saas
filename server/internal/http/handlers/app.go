@@ -86,6 +86,13 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 				}
 				evt.Msg("openai enhancer fallback")
 			},
+			OnWarning: func(reason, detail string) {
+				logger.Warn().
+					Str("provider", credentials.ProviderOpenAI).
+					Str("reason", reason).
+					Str("detail", detail).
+					Msg("openai enhancer normalization")
+			},
 		})
 		if err != nil {
 			logger.Warn().Err(err).Str("provider", credentials.ProviderOpenAI).Msg("failed to initialize openai enhancer, falling back to static prompts")

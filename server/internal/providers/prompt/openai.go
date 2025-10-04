@@ -19,6 +19,7 @@ type OpenAIOptions struct {
 	HTTPClient   *http.Client
 	Fallback     Enhancer
 	OnFallback   func(reason string, err error)
+	OnWarning    func(reason, detail string)
 }
 
 type OpenAIEnhancer struct {
@@ -32,6 +33,28 @@ type OpenAIEnhancer struct {
 }
 
 const openAIDefaultTimeout = 15 * time.Second
+
+const defaultOpenAIModel = "gpt-4o-mini"
+
+var openAIModelCanonical = map[string]string{
+	"gpt-3.5-turbo": "gpt-3.5-turbo",
+	"gpt-4o-mini":   "gpt-4o-mini",
+}
+
+var openAIModelAliases = map[string]string{
+	"gpt-3.5":                "gpt-3.5-turbo",
+	"gpt3.5":                 "gpt-3.5-turbo",
+	"gpt-3-5":                "gpt-3.5-turbo",
+	"gpt-35-turbo":           "gpt-3.5-turbo",
+	"gpt35-turbo":            "gpt-3.5-turbo",
+	"gpt4o-mini":             "gpt-4o-mini",
+	"gpt4omini":              "gpt-4o-mini",
+	"gpt-4o-mini-2024-07-18": "gpt-4o-mini",
+	"gpt-4o-mini-2024-05-13": "gpt-4o-mini",
+	"gpt-5-thinking":         "gpt-4o-mini",
+	"gpt5-thinking":          "gpt-4o-mini",
+	"gpt-5-think":            "gpt-4o-mini",
+}
 
 type openAIChatRequest struct {
 	Model          string          `json:"model"`
@@ -65,9 +88,11 @@ func NewOpenAIEnhancer(opts OpenAIOptions) (*OpenAIEnhancer, error) {
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}
-	model := strings.TrimSpace(opts.Model)
-	if model == "" {
-		model = "gpt-4o-mini"
+	modelInput := strings.TrimSpace(opts.Model)
+	normalizedModel, normalizationReason := normalizeOpenAIModel(modelInput)
+	if normalizationReason != "" && opts.OnWarning != nil {
+		detail := fmt.Sprintf("requested=%s resolved=%s", coalesce(modelInput, defaultOpenAIModel), normalizedModel)
+		opts.OnWarning("model_"+normalizationReason, detail)
 	}
 	client := opts.HTTPClient
 	if client == nil {
@@ -75,7 +100,7 @@ func NewOpenAIEnhancer(opts OpenAIOptions) (*OpenAIEnhancer, error) {
 	}
 	return &OpenAIEnhancer{
 		apiKey:       strings.TrimSpace(opts.APIKey),
-		model:        model,
+		model:        normalizedModel,
 		baseURL:      baseURL,
 		organization: strings.TrimSpace(opts.Organization),
 		client:       client,
@@ -302,3 +327,25 @@ func (o *OpenAIEnhancer) emitFallback(reason string, err error) {
 }
 
 var _ Enhancer = (*OpenAIEnhancer)(nil)
+
+func normalizeOpenAIModel(name string) (string, string) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return defaultOpenAIModel, ""
+	}
+	normalized := strings.ToLower(trimmed)
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	normalized = strings.ReplaceAll(normalized, " ", "-")
+	if canonical, ok := openAIModelCanonical[normalized]; ok {
+		return canonical, ""
+	}
+	if alias, ok := openAIModelAliases[normalized]; ok {
+		lowerAlias := strings.ToLower(alias)
+		lowerAlias = strings.ReplaceAll(lowerAlias, "_", "-")
+		if canonical, ok := openAIModelCanonical[lowerAlias]; ok {
+			return canonical, "alias"
+		}
+		return alias, "alias"
+	}
+	return defaultOpenAIModel, "defaulted"
+}
