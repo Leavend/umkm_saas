@@ -15,6 +15,8 @@ cp .env.example .env
 go mod tidy
 # prepare database schema
 make migrate
+# store Gemini key centrally (optional, enables dynamic prompts for all users)
+GEMINI_API_KEY=your-google-ai-key make set-gemini-key
 ```
 
 ## Run services
