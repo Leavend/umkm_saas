@@ -109,7 +109,7 @@ func ResolveCountry(r *http.Request, lookup CountryLookup) string {
 	if r == nil {
 		return ""
 	}
-	headerHints := []string{"X-IP-Country", "CF-IPCountry", "X-Country-Code", "X-Appengine-Country"}
+	headerHints := []string{"X-Country-Code", "X-IP-Country", "CF-IPCountry", "X-Appengine-Country"}
 	for _, key := range headerHints {
 		if val := strings.TrimSpace(r.Header.Get(key)); val != "" {
 			return strings.ToUpper(val)
