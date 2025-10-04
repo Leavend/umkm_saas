@@ -3,6 +3,7 @@ package jsoncfg
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 type WatermarkConfig struct {
@@ -28,6 +29,14 @@ type PromptJSON struct {
 	Quantity     int             `json:"quantity"`
 	References   []string        `json:"references"`
 	Extras       ExtrasConfig    `json:"extras"`
+}
+
+var allowedAspectRatios = map[string]struct{}{
+	"1:1":  {},
+	"4:3":  {},
+	"3:4":  {},
+	"16:9": {},
+	"9:16": {},
 }
 
 const (
@@ -72,6 +81,37 @@ func (p *PromptJSON) Normalize(preferredLocale string) {
 	if p.Extras.Quality == "" {
 		p.Extras.Quality = DefaultExtrasQuality
 	}
+}
+
+// Validate ensures the prompt JSON satisfies the required contract before persistence or enhancement.
+func (p PromptJSON) Validate() error {
+	if strings.TrimSpace(p.Title) == "" {
+		return fmt.Errorf("title is required")
+	}
+	if strings.TrimSpace(p.ProductType) == "" {
+		return fmt.Errorf("product_type is required")
+	}
+	if strings.TrimSpace(p.Style) == "" {
+		return fmt.Errorf("style is required")
+	}
+	if strings.TrimSpace(p.Background) == "" {
+		return fmt.Errorf("background is required")
+	}
+	if p.Quantity < 1 || p.Quantity > MaxPromptQuantity {
+		return fmt.Errorf("quantity must be between 1 and %d", MaxPromptQuantity)
+	}
+	if _, ok := allowedAspectRatios[p.AspectRatio]; !ok {
+		return fmt.Errorf("aspect_ratio must be one of 1:1, 4:3, 3:4, 16:9, 9:16")
+	}
+	if p.Watermark.Enabled {
+		if strings.TrimSpace(p.Watermark.Text) == "" {
+			return fmt.Errorf("watermark.text is required when watermark.enabled is true")
+		}
+		if strings.TrimSpace(p.Watermark.Position) == "" {
+			return fmt.Errorf("watermark.position is required when watermark.enabled is true")
+		}
+	}
+	return nil
 }
 
 type EnhanceOptions struct {

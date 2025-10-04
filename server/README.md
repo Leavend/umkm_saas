@@ -15,6 +15,10 @@ cp .env.example .env
 go mod tidy
 # prepare database schema
 make migrate
+# store provider key centrally (optional, enables dynamic prompts for all users)
+GEMINI_API_KEY=your-google-ai-key make set-gemini-key
+# or switch to OpenAI by updating PROMPT_PROVIDER=openai and setting the key
+OPENAI_API_KEY=your-openai-key make set-openai-key
 ```
 
 ## Run services
