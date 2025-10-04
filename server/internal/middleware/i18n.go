@@ -7,11 +7,12 @@ import (
 	"strings"
 )
 
-type contextKey string
+type localeContextKey struct{}
+type countryContextKey struct{}
 
-const (
-	LocaleKey  contextKey = "locale"
-	CountryKey contextKey = "country"
+var (
+	LocaleKey  = localeContextKey{}
+	CountryKey = countryContextKey{}
 )
 
 // CountryLookup resolves ISO country codes for an IP address.
