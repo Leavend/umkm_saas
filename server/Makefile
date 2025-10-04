@@ -7,7 +7,7 @@ include .env
 export $(shell sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' .env)
 endif
 
-.PHONY: run worker migrate fmt vet lint test sqllint verify
+.PHONY: run worker migrate fmt vet lint test sqllint verify set-gemini-key
 
 run:
 	@set -a; . ./.env 2>/dev/null || true; set +a; \
@@ -37,3 +37,7 @@ sqllint:
 	$(GO) run ./internal/tools/sqllint
 
 verify: fmt vet lint sqllint test
+
+set-gemini-key:
+	@set -a; . ./.env 2>/dev/null || true; set +a; \
+	$(GO) run ./cmd/geminikey -key "$$GEMINI_API_KEY"
