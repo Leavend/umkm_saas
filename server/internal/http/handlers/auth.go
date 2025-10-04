@@ -56,7 +56,8 @@ func (a *App) AuthGoogleVerify(w http.ResponseWriter, r *http.Request) {
 	if locale == "" {
 		locale = "en"
 	}
-	row := a.SQL.QueryRow(r.Context(), sqlinline.QUpsertGoogleUser, sub, email, name, picture, locale)
+	ipCountry := resolveIPCountry(r, a.GeoIPResolver)
+	row := a.SQL.QueryRow(r.Context(), sqlinline.QUpsertGoogleUser, sub, email, name, picture, locale, ipCountry)
 	var userID string
 	var plan string
 	var propsBytes []byte
@@ -138,6 +139,21 @@ func extractQuota(b []byte) (map[string]any, int, int) {
 		quotaUsed = int(v)
 	}
 	return props, quotaDaily, quotaUsed
+}
+
+type countryResolver interface {
+	CountryCode(ip string) (string, error)
+}
+
+func resolveIPCountry(r *http.Request, resolver countryResolver) string {
+	if country := middleware.CountryFromContext(r.Context()); country != "" {
+		return country
+	}
+	var lookup middleware.CountryLookup
+	if resolver != nil {
+		lookup = resolver.CountryCode
+	}
+	return middleware.ResolveCountry(r, lookup)
 }
 
 func (a *App) PromptClear(w http.ResponseWriter, r *http.Request) {
