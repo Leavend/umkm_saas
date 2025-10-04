@@ -8,7 +8,7 @@
 
 # Environment variables
 # Jangan pernah commit secrets. Gunakan .env.example sebagai template.
-.env
+**/.env
 
 # Log files
 # Abaikan file log yang dibuat selama development atau di production.
