@@ -133,6 +133,7 @@ func (g *GeminiEnhancer) Enhance(ctx context.Context, req EnhanceRequest) (*Enha
 		return g.useFallback(ctx, req)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-goog-api-key", g.apiKey)
 	resp, err := g.client.Do(httpReq)
 	if err != nil {
 		return g.useFallback(ctx, req)
@@ -151,8 +152,8 @@ func (g *GeminiEnhancer) Enhance(ctx context.Context, req EnhanceRequest) (*Enha
 	if text == "" {
 		return g.useFallback(ctx, req)
 	}
-	var parsed geminiEnhancePayload
-	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+	parsed, err := parseGeminiPayload[geminiEnhancePayload](text)
+	if err != nil {
 		return g.useFallback(ctx, req)
 	}
 	response := &EnhanceResponse{
@@ -208,6 +209,7 @@ func (g *GeminiEnhancer) Random(ctx context.Context, locale string) ([]EnhanceRe
 		return g.useFallbackRandom(ctx, locale)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-goog-api-key", g.apiKey)
 	resp, err := g.client.Do(httpReq)
 	if err != nil {
 		return g.useFallbackRandom(ctx, locale)
@@ -226,8 +228,8 @@ func (g *GeminiEnhancer) Random(ctx context.Context, locale string) ([]EnhanceRe
 	if text == "" {
 		return g.useFallbackRandom(ctx, locale)
 	}
-	var parsed geminiRandomPayload
-	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+	parsed, err := parseGeminiPayload[geminiRandomPayload](text)
+	if err != nil {
 		return g.useFallbackRandom(ctx, locale)
 	}
 	if len(parsed.Items) == 0 {
@@ -314,7 +316,7 @@ func (g *GeminiEnhancer) buildRandomPrompt(locale string) string {
 		locale = "en"
 	}
 	sb := &strings.Builder{}
-	fmt.Fprintf(sb, "Generate three unique product marketing prompt ideas for small businesses. Respond as JSON: {\"items\":[{\"title\":string,\"description\":string,\"keywords\":string[]}],\"locale\":%q}. Use locale '%s' for language.", locale, locale)
+	fmt.Fprintf(sb, "Generate three unique product marketing prompt ideas for small businesses. Respond strictly as JSON: {\"items\":[{\"title\":string,\"description\":string,\"keywords\":string[]}],\"locale\":%q}. Use locale '%s' for language and make each response noticeably different. randomness_token=%d.", locale, locale, time.Now().UnixNano())
 	return sb.String()
 }
 
@@ -359,6 +361,48 @@ func coalesce(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func parseGeminiPayload[T any](raw string) (T, error) {
+	var zero T
+	cleaned := extractJSONFragment(raw)
+	if cleaned == "" {
+		return zero, errors.New("empty payload")
+	}
+	var decoded T
+	if err := json.Unmarshal([]byte(cleaned), &decoded); err != nil {
+		return zero, err
+	}
+	return decoded, nil
+}
+
+func extractJSONFragment(raw string) string {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return ""
+	}
+	text = trimCodeFence(text)
+	start := strings.IndexAny(text, "{[")
+	end := strings.LastIndexAny(text, "]}")
+	if start >= 0 && end >= start {
+		text = text[start : end+1]
+	}
+	return strings.TrimSpace(text)
+}
+
+func trimCodeFence(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasPrefix(trimmed, "```") {
+		return trimmed
+	}
+	trimmed = strings.TrimPrefix(trimmed, "```json")
+	trimmed = strings.TrimPrefix(trimmed, "```JSON")
+	trimmed = strings.TrimPrefix(trimmed, "```")
+	trimmed = strings.TrimSpace(trimmed)
+	if idx := strings.LastIndex(trimmed, "```"); idx >= 0 {
+		trimmed = trimmed[:idx]
+	}
+	return strings.TrimSpace(trimmed)
 }
 
 var _ Enhancer = (*GeminiEnhancer)(nil)
