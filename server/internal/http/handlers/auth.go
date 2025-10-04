@@ -147,24 +147,14 @@ type countryResolver interface {
 }
 
 func resolveIPCountry(r *http.Request, resolver countryResolver) string {
-	if r == nil {
-		return ""
+	if country := middleware.CountryFromContext(r.Context()); country != "" {
+		return country
 	}
-	headers := []string{"X-IP-Country", "CF-IPCountry", "X-Country-Code"}
-	for _, key := range headers {
-		if val := strings.TrimSpace(r.Header.Get(key)); val != "" {
-			return strings.ToUpper(val)
-		}
+	var lookup middleware.CountryLookup
+	if resolver != nil {
+		lookup = resolver.CountryCode
 	}
-	if resolver == nil {
-		return ""
-	}
-	if ip := middleware.ClientIP(r); ip != "" {
-		if country, err := resolver.CountryCode(ip); err == nil && country != "" {
-			return strings.ToUpper(country)
-		}
-	}
-	return ""
+	return middleware.ResolveCountry(r, lookup)
 }
 
 func (a *App) PromptClear(w http.ResponseWriter, r *http.Request) {
