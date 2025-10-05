@@ -267,7 +267,9 @@ func (o *OpenAIEnhancer) useFallback(ctx context.Context, req EnhanceRequest, re
 	if o.fallback != nil {
 		res, err := o.fallback.Enhance(ctx, req)
 		if res != nil {
-			res.Provider = staticProviderName
+			if res.Provider == "" {
+				res.Provider = staticProviderName
+			}
 			if res.Metadata == nil {
 				res.Metadata = map[string]string{}
 			}
@@ -296,7 +298,9 @@ func (o *OpenAIEnhancer) useFallbackRandom(ctx context.Context, locale string, r
 	if o.fallback != nil {
 		items, err := o.fallback.Random(ctx, locale)
 		for i := range items {
-			items[i].Provider = staticProviderName
+			if items[i].Provider == "" {
+				items[i].Provider = staticProviderName
+			}
 			if items[i].Metadata == nil {
 				items[i].Metadata = map[string]string{}
 			}

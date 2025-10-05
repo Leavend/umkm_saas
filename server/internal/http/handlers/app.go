@@ -65,13 +65,11 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 	}
 
 	providerChoice := strings.TrimSpace(strings.ToLower(cfg.PromptProvider))
-	switch providerChoice {
-	case credentials.ProviderOpenAI:
-		openaiKey := loadKey(cfg.OpenAIAPIKey, credentialStore.OpenAIAPIKey, credentialStore.SetOpenAIAPIKey, credentials.ProviderOpenAI)
-		if openaiKey == "" {
-			logger.Warn().Str("provider", credentials.ProviderOpenAI).Msg("openai api key missing; prompt enhancer will use static provider")
-			break
-		}
+
+	// Preload provider credentials so we can wire graceful fallbacks (Gemini -> OpenAI -> Static).
+	openaiKey := loadKey(cfg.OpenAIAPIKey, credentialStore.OpenAIAPIKey, credentialStore.SetOpenAIAPIKey, credentials.ProviderOpenAI)
+	var openaiEnhancer prompt.Enhancer
+	if openaiKey != "" {
 		enhancer, err := prompt.NewOpenAIEnhancer(prompt.OpenAIOptions{
 			APIKey:       openaiKey,
 			Model:        cfg.OpenAIModel,
@@ -97,20 +95,23 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 		if err != nil {
 			logger.Warn().Err(err).Str("provider", credentials.ProviderOpenAI).Msg("failed to initialize openai enhancer, falling back to static prompts")
 		} else {
-			promptProvider = enhancer
+			openaiEnhancer = enhancer
 		}
-	case credentials.ProviderGemini, "":
-		geminiKey := loadKey(cfg.GeminiAPIKey, credentialStore.GeminiAPIKey, credentialStore.SetGeminiAPIKey, credentials.ProviderGemini)
-		if geminiKey == "" {
-			logger.Warn().Str("provider", credentials.ProviderGemini).Msg("gemini api key missing; prompt enhancer will use static provider")
-			break
+	}
+
+	geminiKey := loadKey(cfg.GeminiAPIKey, credentialStore.GeminiAPIKey, credentialStore.SetGeminiAPIKey, credentials.ProviderGemini)
+	var geminiEnhancer prompt.Enhancer
+	if geminiKey != "" {
+		geminiFallback := prompt.Enhancer(staticEnhancer)
+		if openaiEnhancer != nil {
+			geminiFallback = openaiEnhancer
 		}
 		enhancer, err := prompt.NewGeminiEnhancer(prompt.GeminiOptions{
 			APIKey:     geminiKey,
 			Model:      cfg.GeminiModel,
 			BaseURL:    cfg.GeminiBaseURL,
 			HTTPClient: &http.Client{Timeout: 15 * time.Second},
-			Fallback:   staticEnhancer,
+			Fallback:   geminiFallback,
 			OnFallback: func(reason string, err error) {
 				evt := logger.Warn().Str("provider", credentials.ProviderGemini).Str("reason", reason)
 				if err != nil {
@@ -122,7 +123,30 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 		if err != nil {
 			logger.Warn().Err(err).Str("provider", credentials.ProviderGemini).Msg("failed to initialize gemini enhancer, falling back to static prompts")
 		} else {
-			promptProvider = enhancer
+			geminiEnhancer = enhancer
+		}
+	}
+
+	switch providerChoice {
+	case credentials.ProviderOpenAI:
+		switch {
+		case openaiEnhancer != nil:
+			promptProvider = openaiEnhancer
+		case geminiEnhancer != nil:
+			logger.Warn().Str("provider", credentials.ProviderOpenAI).Msg("openai api key unavailable; using gemini enhancer instead")
+			promptProvider = geminiEnhancer
+		default:
+			logger.Warn().Str("provider", credentials.ProviderOpenAI).Msg("openai api key missing; prompt enhancer will use static provider")
+		}
+	case credentials.ProviderGemini, "":
+		switch {
+		case geminiEnhancer != nil:
+			promptProvider = geminiEnhancer
+		case openaiEnhancer != nil:
+			logger.Warn().Str("provider", credentials.ProviderGemini).Msg("gemini api key unavailable; using openai enhancer instead")
+			promptProvider = openaiEnhancer
+		default:
+			logger.Warn().Str("provider", credentials.ProviderGemini).Msg("gemini api key missing; prompt enhancer will use static provider")
 		}
 	case "static":
 		logger.Info().Msg("prompt provider configured as static; dynamic prompts disabled")

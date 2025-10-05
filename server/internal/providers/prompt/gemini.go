@@ -251,7 +251,9 @@ func (g *GeminiEnhancer) useFallback(ctx context.Context, req EnhanceRequest, re
 	if g.fallback != nil {
 		res, err := g.fallback.Enhance(ctx, req)
 		if res != nil {
-			res.Provider = staticProviderName
+			if res.Provider == "" {
+				res.Provider = staticProviderName
+			}
 			if res.Metadata == nil {
 				res.Metadata = map[string]string{}
 			}
@@ -280,7 +282,9 @@ func (g *GeminiEnhancer) useFallbackRandom(ctx context.Context, locale string, r
 	if g.fallback != nil {
 		items, err := g.fallback.Random(ctx, locale)
 		for i := range items {
-			items[i].Provider = staticProviderName
+			if items[i].Provider == "" {
+				items[i].Provider = staticProviderName
+			}
 			if items[i].Metadata == nil {
 				items[i].Metadata = map[string]string{}
 			}
