@@ -94,8 +94,8 @@ type geminiPart struct {
 }
 
 type geminiTool struct {
-	ImageGeneration *geminiImageTool `json:"image_generation,omitempty"`
-	VideoGeneration *geminiVideoTool `json:"video_generation,omitempty"`
+	ImageGeneration *geminiImageTool `json:"imageGeneration,omitempty"`
+	VideoGeneration *geminiVideoTool `json:"videoGeneration,omitempty"`
 }
 
 type geminiImageTool struct{}
@@ -120,17 +120,17 @@ type geminiGenerationConfig struct {
 type geminiGenerateContentRequest struct {
 	Contents         []geminiContent         `json:"contents"`
 	Tools            []geminiTool            `json:"tools,omitempty"`
-	ToolConfig       *geminiToolConfig       `json:"tool_config,omitempty"`
+	ToolConfig       *geminiToolConfig       `json:"toolConfig,omitempty"`
 	GenerationConfig *geminiGenerationConfig `json:"generationConfig,omitempty"`
 }
 
 type geminiToolConfig struct {
-	ImageGenerationConfig *geminiImageGenerationConfig `json:"image_generation_config,omitempty"`
-	VideoGenerationConfig *geminiVideoGenerationConfig `json:"video_generation_config,omitempty"`
+	ImageGenerationConfig *geminiImageGenerationConfig `json:"imageGenerationConfig,omitempty"`
+	VideoGenerationConfig *geminiVideoGenerationConfig `json:"videoGenerationConfig,omitempty"`
 }
 
 type geminiImageGenerationConfig struct {
-	NumberOfImages int `json:"number_of_images,omitempty"`
+	NumberOfImages int `json:"numberOfImages,omitempty"`
 }
 
 type geminiVideoGenerationConfig struct{}
