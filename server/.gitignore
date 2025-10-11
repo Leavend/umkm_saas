@@ -10,6 +10,8 @@
 # Jangan pernah commit secrets. Gunakan .env.example sebagai template.
 **/.env
 
+**/storage/
+
 # Log files
 # Abaikan file log yang dibuat selama development atau di production.
 *.log
