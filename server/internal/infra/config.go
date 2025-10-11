@@ -19,6 +19,10 @@ type Config struct {
 	GoogleClientID   string
 	GoogleIssuer     string
 	PromptProvider   string
+	QwenAPIKey       string
+	QwenModel        string
+	QwenBaseURL      string
+	QwenDefaultSize  string
 	GeminiAPIKey     string
 	GeminiModel      string
 	GeminiBaseURL    string
@@ -45,6 +49,10 @@ func LoadConfig() (*Config, error) {
 		GoogleClientID:   os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleIssuer:     getEnv("GOOGLE_ISSUER", "https://accounts.google.com"),
 		PromptProvider:   getEnv("PROMPT_PROVIDER", "gemini"),
+		QwenAPIKey:       os.Getenv("QWEN_API_KEY"),
+		QwenModel:        getEnv("QWEN_MODEL", "qwen-image-plus"),
+		QwenBaseURL:      getEnv("QWEN_BASE_URL", "https://dashscope-intl.aliyuncs.com/api/v1"),
+		QwenDefaultSize:  getEnv("QWEN_DEFAULT_SIZE", "1328*1328"),
 		GeminiAPIKey:     os.Getenv("GEMINI_API_KEY"),
 		GeminiModel:      getEnv("GEMINI_MODEL", "gemini-2.5-flash"),
 		GeminiBaseURL:    getEnv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"),

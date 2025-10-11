@@ -20,6 +20,7 @@ import (
 	"server/internal/middleware"
 	"server/internal/providers/genai"
 	"server/internal/providers/image"
+	"server/internal/providers/qwen"
 	videoprovider "server/internal/providers/video"
 	"server/internal/sqlinline"
 
@@ -47,13 +48,25 @@ func TestImagesGenerateIntegration(t *testing.T) {
 		t.Fatalf("new gemini client: %v", err)
 	}
 
+	geminiGenerator := image.NewGeminiGenerator(geminiClient)
+	qwenClient, err := qwen.NewClient(qwen.Options{Model: "qwen-image-plus"})
+	if err != nil {
+		t.Fatalf("new qwen client: %v", err)
+	}
+	qwenGenerator := image.NewQwenGenerator(qwenClient, geminiGenerator)
+
 	app := &handlers.App{
-		Config:         cfg,
-		Logger:         logger,
-		SQL:            runner,
-		ImageProviders: map[string]image.Generator{"gemini": image.NewGeminiGenerator(geminiClient)},
+		Config:    cfg,
+		Logger:    logger,
+		SQL:       runner,
+		JWTSecret: cfg.JWTSecret,
+		ImageProviders: map[string]image.Generator{
+			"qwen":            qwenGenerator,
+			"qwen-image":      qwenGenerator,
+			"qwen-image-plus": qwenGenerator,
+			"gemini":          geminiGenerator,
+		},
 		VideoProviders: map[string]videoprovider.Generator{},
-		JWTSecret:      cfg.JWTSecret,
 	}
 
 	router := httpapi.NewRouter(app)
@@ -140,13 +153,15 @@ func TestImagesGenerateIntegration(t *testing.T) {
 	}
 	generator := app.ImageProviders[provider]
 	assets, err := generator.Generate(ctx, image.GenerateRequest{
-		Prompt:       prompt.Title,
-		Quantity:     quantity,
-		AspectRatio:  aspect,
-		Provider:     provider,
-		RequestID:    jobID,
-		Locale:       prompt.Extras.Locale,
-		WatermarkTag: prompt.Watermark.Text,
+		Prompt:         image.BuildMarketingPrompt(prompt),
+		Quantity:       quantity,
+		AspectRatio:    aspect,
+		Provider:       provider,
+		RequestID:      jobID,
+		Locale:         prompt.Extras.Locale,
+		WatermarkTag:   prompt.Watermark.Text,
+		Quality:        prompt.Extras.Quality,
+		NegativePrompt: image.DefaultNegativePrompt,
 	})
 	if err != nil {
 		t.Fatalf("generate assets: %v", err)
@@ -206,13 +221,25 @@ func TestImageJobAccessControl(t *testing.T) {
 		t.Fatalf("new gemini client: %v", err)
 	}
 
+	geminiGenerator := image.NewGeminiGenerator(geminiClient)
+	qwenClient, err := qwen.NewClient(qwen.Options{Model: "qwen-image-plus"})
+	if err != nil {
+		t.Fatalf("new qwen client: %v", err)
+	}
+	qwenGenerator := image.NewQwenGenerator(qwenClient, geminiGenerator)
+
 	app := &handlers.App{
-		Config:         cfg,
-		Logger:         logger,
-		SQL:            runner,
-		ImageProviders: map[string]image.Generator{"gemini": image.NewGeminiGenerator(geminiClient)},
+		Config:    cfg,
+		Logger:    logger,
+		SQL:       runner,
+		JWTSecret: cfg.JWTSecret,
+		ImageProviders: map[string]image.Generator{
+			"qwen":            qwenGenerator,
+			"qwen-image":      qwenGenerator,
+			"qwen-image-plus": qwenGenerator,
+			"gemini":          geminiGenerator,
+		},
 		VideoProviders: map[string]videoprovider.Generator{},
-		JWTSecret:      cfg.JWTSecret,
 	}
 	router := httpapi.NewRouter(app)
 

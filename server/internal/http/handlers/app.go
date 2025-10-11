@@ -15,6 +15,7 @@ import (
 	"server/internal/providers/genai"
 	"server/internal/providers/image"
 	"server/internal/providers/prompt"
+	"server/internal/providers/qwen"
 	"server/internal/providers/video"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -100,6 +101,7 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 		}
 	}
 
+	qwenKey := loadKey(cfg.QwenAPIKey, credentialStore.QwenAPIKey, credentialStore.SetQwenAPIKey, credentials.ProviderQwen)
 	geminiKey := loadKey(cfg.GeminiAPIKey, credentialStore.GeminiAPIKey, credentialStore.SetGeminiAPIKey, credentials.ProviderGemini)
 	var geminiEnhancer prompt.Enhancer
 	if geminiKey != "" {
@@ -170,8 +172,38 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 		logger.Warn().Str("model", geminiClient.Model()).Msg("gemini api key missing; synthetic media assets will be generated")
 	}
 
+	qwenClient, err := qwen.NewClient(qwen.Options{
+		APIKey:         qwenKey,
+		BaseURL:        cfg.QwenBaseURL,
+		Model:          cfg.QwenModel,
+		DefaultSize:    cfg.QwenDefaultSize,
+		PromptExtend:   true,
+		Watermark:      false,
+		HTTPClient:     &http.Client{Timeout: 45 * time.Second},
+		Logger:         &logger,
+		RequestTimeout: 45 * time.Second,
+	})
+	if err != nil {
+		logger.Fatal().Err(err).Msg("failed to configure qwen client")
+	}
+	if !qwenClient.HasCredentials() {
+		logger.Warn().Str("model", qwenClient.Model()).Msg("qwen api key missing; worker will fall back to synthetic assets")
+	}
+
 	geminiImage := image.NewGeminiGenerator(geminiClient)
 	geminiVideo := video.NewGeminiGenerator(geminiClient)
+	qwenImage := image.NewQwenGenerator(qwenClient, geminiImage)
+
+	imageProviders := map[string]image.Generator{
+		"qwen":                              qwenImage,
+		"qwen-image":                        qwenImage,
+		"qwen-image-plus":                   qwenImage,
+		strings.ToLower(qwenClient.Model()): qwenImage,
+		"gemini":                            geminiImage,
+		"gemini-1.5-flash":                  geminiImage,
+		"gemini-2.0-flash":                  geminiImage,
+		"gemini-2.5-flash":                  geminiImage,
+	}
 
 	return &App{
 		Config:         cfg,
@@ -181,12 +213,7 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 		GeoIPResolver:  geoResolver,
 		GoogleVerifier: googleauth.NewVerifier(cfg.GoogleIssuer, cfg.GoogleClientID),
 		PromptEnhancer: promptProvider,
-		ImageProviders: map[string]image.Generator{
-			"gemini":           geminiImage,
-			"gemini-1.5-flash": geminiImage,
-			"gemini-2.0-flash": geminiImage,
-			"gemini-2.5-flash": geminiImage,
-		},
+		ImageProviders: imageProviders,
 		VideoProviders: map[string]video.Generator{
 			"gemini":           geminiVideo,
 			"gemini-1.5-flash": geminiVideo,
