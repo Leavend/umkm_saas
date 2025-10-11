@@ -105,3 +105,35 @@ from users
 where id = $1::uuid
 limit 1;
 `
+
+const QSelectUserPlanByEmail = `--sql 4c7a8748-6f39-4e3b-9bfb-0dc119a1e1b0
+select
+    id,
+    email,
+    plan,
+    properties
+from users
+where email = $1::text
+limit 1;
+`
+
+const QSelectUserPlanByID = `--sql 9d3e9d9f-52f0-41a9-bfc7-53a6b62d84fa
+select
+    id,
+    email,
+    plan,
+    properties
+from users
+where id = $1::uuid
+limit 1;
+`
+
+const QUpdateUserPlan = `--sql b8f829e8-0cfd-40a4-9adc-4ebaa002beac
+update users
+set
+    plan = $2::text,
+    properties = $3::jsonb,
+    updated_at = now()
+where id = $1::uuid
+returning id, email, plan, properties;
+`

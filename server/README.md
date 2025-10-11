@@ -36,6 +36,31 @@ make worker # starts background worker processing generation jobs
 > services. When developing offline, make sure the dependencies are cached or
 > vendored locally prior to running the commands above.
 
+## Upgrading a user's plan
+
+Use the dedicated CLI to switch a user from the free tier to pro (or any other
+supported plan) and refresh their quota metadata. The command accepts either a
+user ID or email address and, by default, bumps the daily quota to 50 while
+resetting the usage counter.
+
+```bash
+# upgrade by email, set plan to pro with a 75 image/day quota
+make user-plan ARGS="-email tiohadybayu@gmail.com -plan pro -quota 75"
+
+# alternatively reference the UUID directly and keep the existing usage tally
+make user-plan ARGS="-id ee717b5d-ae7e-42fa-a32b-d60b39afb943 -plan pro -keep-usage"
+```
+
+Flags:
+
+- `-email` *(string)*: look up the user by email.
+- `-id` *(UUID)*: look up the user by ID.
+- `-plan` *(string, default `pro`)*: assign one of `free`, `pro`, or `supporter`.
+- `-quota` *(int, default `50`)*: update the daily quota; pass `0` or a negative
+  number to keep the current value.
+- `-keep-usage` *(bool)*: when set, preserves the existing
+  `quota_used_today` value instead of resetting it to zero.
+
 The worker and HTTP layer both delegate image & video generation to the
 Gemini **2.5 Flash** provider. When no `GEMINI_API_KEY` is configured the
 provider emits deterministic synthetic assets so the end-to-end pipeline remains
