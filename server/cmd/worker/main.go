@@ -268,6 +268,18 @@ func (w *jobWorker) processImageJob(j job) error {
 	if generator == nil {
 		return fmt.Errorf("image provider %q not configured", provider)
 	}
+	sourceImage, err := w.resolveSourceImage(j.UserID, prompt.SourceAsset)
+	if err != nil {
+		return fmt.Errorf("load source asset: %w", err)
+	}
+	workflow := image.Workflow{
+		Mode:            image.NormalizeWorkflowMode(prompt.Workflow.Mode),
+		BackgroundTheme: prompt.Workflow.BackgroundTheme,
+		BackgroundStyle: prompt.Workflow.BackgroundStyle,
+		EnhanceLevel:    prompt.Workflow.EnhanceLevel,
+		RetouchStrength: prompt.Workflow.RetouchStrength,
+		Notes:           prompt.Workflow.Notes,
+	}
 	assets, err := generator.Generate(w.ctx, image.GenerateRequest{
 		Prompt:         image.BuildMarketingPrompt(prompt),
 		Quantity:       j.Quantity,
@@ -278,6 +290,8 @@ func (w *jobWorker) processImageJob(j job) error {
 		WatermarkTag:   prompt.Watermark.Text,
 		Quality:        prompt.Extras.Quality,
 		NegativePrompt: image.DefaultNegativePrompt,
+		Workflow:       workflow,
+		SourceImage:    sourceImage,
 	})
 	if err != nil {
 		return fmt.Errorf("image generation: %w", err)
@@ -491,4 +505,109 @@ func extensionForMIME(mime string) string {
 	default:
 		return ""
 	}
+}
+
+func (w *jobWorker) resolveSourceImage(userID string, cfg jsoncfg.SourceAssetConfig) (*image.SourceImage, error) {
+	if cfg.IsZero() {
+		return nil, nil
+	}
+	var (
+		storageKey = strings.TrimSpace(cfg.StorageKey)
+		mime       = strings.TrimSpace(cfg.Mime)
+		filename   = strings.TrimSpace(cfg.Filename)
+		url        = strings.TrimSpace(cfg.URL)
+		width      int
+		height     int
+	)
+	if cfg.AssetID != "" {
+		row := w.runner.QueryRow(w.ctx, sqlinline.QSelectAssetByID, cfg.AssetID)
+		var (
+			assetID    string
+			ownerID    string
+			storedKey  string
+			storedMIME string
+			bytes      int64
+			storedW    int
+			storedH    int
+			aspect     string
+			props      []byte
+		)
+		if err := row.Scan(&assetID, &ownerID, &storedKey, &storedMIME, &bytes, &storedW, &storedH, &aspect, &props); err != nil {
+			return nil, err
+		}
+		if ownerID != userID {
+			return nil, fmt.Errorf("source asset %s does not belong to user", cfg.AssetID)
+		}
+		if storageKey == "" {
+			storageKey = storedKey
+		}
+		if mime == "" {
+			mime = storedMIME
+		}
+		if width == 0 {
+			width = storedW
+		}
+		if height == 0 {
+			height = storedH
+		}
+		if url == "" {
+			var meta map[string]any
+			if err := json.Unmarshal(props, &meta); err == nil {
+				if val, ok := meta["source_url"].(string); ok {
+					url = val
+				} else if val, ok := meta["url"].(string); ok {
+					url = val
+				}
+			}
+		}
+		if filename == "" {
+			if val, ok := jsonPropertyString(props, "filename"); ok {
+				filename = val
+			}
+		}
+	}
+	var data []byte
+	if storageKey != "" && !isRemotePath(storageKey) && w.store != nil {
+		saved, err := w.store.Read(w.ctx, storageKey)
+		if err == nil {
+			data = saved
+		} else {
+			w.logger.Warn().Err(err).Str("storage_key", storageKey).Msg("worker: failed to read source asset from storage")
+		}
+	}
+	if filename == "" && storageKey != "" {
+		filename = filepath.Base(storageKey)
+	}
+	if url == "" {
+		url = strings.TrimSpace(cfg.URL)
+	}
+	return &image.SourceImage{
+		AssetID:    strings.TrimSpace(cfg.AssetID),
+		StorageKey: storageKey,
+		URL:        url,
+		MIME:       mime,
+		Data:       data,
+		Width:      width,
+		Height:     height,
+		Filename:   filename,
+	}, nil
+}
+
+func jsonPropertyString(raw []byte, key string) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", false
+	}
+	if val, ok := payload[key].(string); ok {
+		return strings.TrimSpace(val), true
+	}
+	return "", false
+}
+
+func isRemotePath(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "data:")
 }

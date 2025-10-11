@@ -39,28 +39,66 @@ func BuildMarketingPrompt(p jsoncfg.PromptJSON) string {
 		lines = append(lines, "Visual direction: "+strings.Join(stylistic, ", ")+".")
 	}
 
-	if instr := strings.TrimSpace(p.Instructions); instr != "" {
-		lines = append(lines, fmt.Sprintf("Creative guidance: %s.", instr))
-	}
+        if instr := strings.TrimSpace(p.Instructions); instr != "" {
+                lines = append(lines, fmt.Sprintf("Creative guidance: %s.", instr))
+        }
 
-	if len(p.References) > 0 {
-		refs := make([]string, 0, len(p.References))
-		for _, ref := range p.References {
-			ref = strings.TrimSpace(ref)
-			if ref != "" {
-				refs = append(refs, ref)
-			}
-		}
-		if len(refs) > 0 {
-			lines = append(lines, "Inspiration references: "+strings.Join(refs, "; "))
-		}
-	}
+        if len(p.References) > 0 {
+                refs := make([]string, 0, len(p.References))
+                for _, ref := range p.References {
+                        ref = strings.TrimSpace(ref)
+                        if ref != "" {
+                                refs = append(refs, ref)
+                        }
+                }
+                if len(refs) > 0 {
+                        lines = append(lines, "Inspiration references: "+strings.Join(refs, "; "))
+                }
+        }
 
-	if p.Watermark.Enabled {
-		watermark := strings.TrimSpace(p.Watermark.Text)
-		if watermark != "" {
-			position := strings.TrimSpace(p.Watermark.Position)
-			if position == "" {
+        if !p.SourceAsset.IsZero() {
+                lines = append(lines, "Use the uploaded product photo as the main subject. Preserve its shape, texture, and logo without warping.")
+        }
+
+        switch p.Workflow.Mode {
+        case jsoncfg.WorkflowModeBackground:
+                theme := strings.TrimSpace(p.Workflow.BackgroundTheme)
+                if theme == "" {
+                        theme = "an on-brand, aesthetic setting"
+                }
+                style := strings.TrimSpace(p.Workflow.BackgroundStyle)
+                if style != "" {
+                        theme = fmt.Sprintf("%s with %s style", theme, style)
+                }
+                lines = append(lines,
+                        fmt.Sprintf("Replace only the background with %s while keeping the product lighting consistent and natural.", theme))
+        case jsoncfg.WorkflowModeEnhance:
+                boost := strings.TrimSpace(p.Workflow.EnhanceLevel)
+                if boost == "" {
+                        boost = "balanced"
+                }
+                lines = append(lines,
+                        fmt.Sprintf("Enhance the original photo with %s colour grading, improved brightness, and crisp contrast while avoiding oversaturation.", boost))
+        case jsoncfg.WorkflowModeRetouch:
+                strength := strings.TrimSpace(p.Workflow.RetouchStrength)
+                if strength == "" {
+                        strength = "gentle"
+                }
+                lines = append(lines,
+                        fmt.Sprintf("Retouch blemishes using a %s touch so the product remains authentic and appetising.", strength))
+        default:
+                // fallthrough: standard generation already covered by default statements above
+        }
+
+        if note := strings.TrimSpace(p.Workflow.Notes); note != "" {
+                lines = append(lines, fmt.Sprintf("Additional workflow note: %s.", note))
+        }
+
+        if p.Watermark.Enabled {
+                watermark := strings.TrimSpace(p.Watermark.Text)
+                if watermark != "" {
+                        position := strings.TrimSpace(p.Watermark.Position)
+                        if position == "" {
 				position = "bottom-right"
 			}
 			lines = append(lines, fmt.Sprintf("Embed the brand watermark text %q at the %s of the composition in a subtle yet readable style.", watermark, position))

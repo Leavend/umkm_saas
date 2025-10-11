@@ -6,31 +6,6 @@ import (
 	"server/internal/providers/genai"
 )
 
-type GenerateRequest struct {
-	Prompt         string
-	Quantity       int
-	AspectRatio    string
-	Provider       string
-	RequestID      string
-	Locale         string
-	WatermarkTag   string
-	Quality        string
-	NegativePrompt string
-}
-
-type Asset struct {
-	StorageKey string
-	URL        string
-	Format     string
-	Width      int
-	Height     int
-	Data       []byte
-}
-
-type Generator interface {
-	Generate(ctx context.Context, req GenerateRequest) ([]Asset, error)
-}
-
 type GeminiGenerator struct {
 	client *genai.Client
 }

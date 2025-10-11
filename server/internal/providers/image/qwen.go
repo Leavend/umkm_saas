@@ -36,6 +36,7 @@ func (g *QwenGenerator) Generate(ctx context.Context, req GenerateRequest) ([]As
 		quantity = 1
 	}
 	size := AspectRatioSize(req.AspectRatio)
+	workflowMode := NormalizeWorkflowMode(string(req.Workflow.Mode))
 	assets := make([]Asset, 0, quantity)
 	for i := 0; i < quantity; i++ {
 		prompt := req.Prompt
@@ -49,6 +50,17 @@ func (g *QwenGenerator) Generate(ctx context.Context, req GenerateRequest) ([]As
 			Size:           size,
 			Seed:           seed,
 			RequestID:      req.RequestID,
+			Quality:        req.Quality,
+			Locale:         req.Locale,
+			Workflow: qwen.Workflow{
+				Mode:            string(workflowMode),
+				BackgroundTheme: strings.TrimSpace(req.Workflow.BackgroundTheme),
+				BackgroundStyle: strings.TrimSpace(req.Workflow.BackgroundStyle),
+				EnhanceLevel:    strings.TrimSpace(req.Workflow.EnhanceLevel),
+				RetouchStrength: strings.TrimSpace(req.Workflow.RetouchStrength),
+				Notes:           strings.TrimSpace(req.Workflow.Notes),
+			},
+			SourceImage: qwenSourceFromRequest(req.SourceImage),
 		})
 		if err != nil {
 			if g.fallback != nil {
@@ -76,6 +88,29 @@ func (g *QwenGenerator) String() string {
 }
 
 var _ Generator = (*QwenGenerator)(nil)
+
+func qwenSourceFromRequest(src *SourceImage) *qwen.SourceImage {
+	if src == nil {
+		return nil
+	}
+	payload := &qwen.SourceImage{
+		AssetID:    strings.TrimSpace(src.AssetID),
+		StorageKey: strings.TrimSpace(src.StorageKey),
+		URL:        strings.TrimSpace(src.URL),
+		MIME:       strings.TrimSpace(src.MIME),
+		Filename:   strings.TrimSpace(src.Filename),
+	}
+	if len(src.Data) > 0 {
+		payload.Data = append([]byte(nil), src.Data...)
+	}
+	if src.Width > 0 {
+		payload.Width = src.Width
+	}
+	if src.Height > 0 {
+		payload.Height = src.Height
+	}
+	return payload
+}
 
 func deterministicSeed(values ...any) int {
 	if len(values) == 0 {

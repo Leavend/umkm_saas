@@ -3,6 +3,7 @@ package qwen
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,6 +54,10 @@ type ImageRequest struct {
 	Size           string
 	Seed           int
 	RequestID      string
+	Quality        string
+	Locale         string
+	Workflow       Workflow
+	SourceImage    *SourceImage
 }
 
 // ImageAsset is the normalized result from the Qwen API.
@@ -62,6 +67,28 @@ type ImageAsset struct {
 	Format string
 	Width  int
 	Height int
+}
+
+// Workflow describes editing directives when conditioning on an input image.
+type Workflow struct {
+	Mode            string
+	BackgroundTheme string
+	BackgroundStyle string
+	EnhanceLevel    string
+	RetouchStrength string
+	Notes           string
+}
+
+// SourceImage represents an uploaded asset to be edited by the Qwen model.
+type SourceImage struct {
+	AssetID    string
+	StorageKey string
+	URL        string
+	MIME       string
+	Filename   string
+	Data       []byte `json:"-"`
+	Width      int
+	Height     int
 }
 
 type generationRequest struct {
@@ -80,15 +107,38 @@ type generationMessage struct {
 }
 
 type generationContent struct {
-	Text string `json:"text,omitempty"`
+	Text  string           `json:"text,omitempty"`
+	Image *generationImage `json:"image,omitempty"`
+}
+
+type generationImage struct {
+	Format string `json:"format,omitempty"`
+	Data   string `json:"image_bytes,omitempty"`
+	URL    string `json:"url,omitempty"`
+	Width  int    `json:"width,omitempty"`
+	Height int    `json:"height,omitempty"`
+	Name   string `json:"name,omitempty"`
 }
 
 type generationParams struct {
-	NegativePrompt string `json:"negative_prompt,omitempty"`
-	Size           string `json:"size,omitempty"`
-	PromptExtend   *bool  `json:"prompt_extend,omitempty"`
-	Watermark      *bool  `json:"watermark,omitempty"`
-	Seed           *int   `json:"seed,omitempty"`
+	NegativePrompt string          `json:"negative_prompt,omitempty"`
+	Size           string          `json:"size,omitempty"`
+	PromptExtend   *bool           `json:"prompt_extend,omitempty"`
+	Watermark      *bool           `json:"watermark,omitempty"`
+	Seed           *int            `json:"seed,omitempty"`
+	Quality        string          `json:"quality,omitempty"`
+	Style          string          `json:"style,omitempty"`
+	Locale         string          `json:"locale,omitempty"`
+	Workflow       *workflowParams `json:"workflow,omitempty"`
+}
+
+type workflowParams struct {
+	Mode            string `json:"mode,omitempty"`
+	BackgroundTheme string `json:"background_theme,omitempty"`
+	BackgroundStyle string `json:"background_style,omitempty"`
+	EnhanceLevel    string `json:"enhance_level,omitempty"`
+	RetouchStrength string `json:"retouch_strength,omitempty"`
+	Notes           string `json:"notes,omitempty"`
 }
 
 type generationResponse struct {
@@ -176,12 +226,17 @@ func (c *Client) GenerateImage(ctx context.Context, req ImageRequest) (*ImageAss
 	if prompt == "" {
 		return nil, errors.New("qwen: prompt is required")
 	}
+	contents := make([]generationContent, 0, 2)
+	if img := encodeImageContent(req.SourceImage); img != nil {
+		contents = append(contents, generationContent{Image: img})
+	}
+	contents = append(contents, generationContent{Text: prompt})
 	payload := generationRequest{
 		Model: c.model,
 		Input: generationInput{
 			Messages: []generationMessage{{
 				Role:    "user",
-				Content: []generationContent{{Text: prompt}},
+				Content: contents,
 			}},
 		},
 		Parameters: generationParams{},
@@ -194,6 +249,10 @@ func (c *Client) GenerateImage(ctx context.Context, req ImageRequest) (*ImageAss
 		size = c.defaultSize
 	}
 	payload.Parameters.Size = size
+	if quality := strings.TrimSpace(req.Quality); quality != "" {
+		payload.Parameters.Quality = quality
+	}
+	payload.Parameters.Style = "product-photography"
 	if extend := c.promptExtend; extend {
 		payload.Parameters.PromptExtend = &extend
 	}
@@ -202,6 +261,12 @@ func (c *Client) GenerateImage(ctx context.Context, req ImageRequest) (*ImageAss
 	}
 	watermark := c.watermark
 	payload.Parameters.Watermark = &watermark
+	if loc := strings.TrimSpace(req.Locale); loc != "" {
+		payload.Parameters.Locale = loc
+	}
+	if wf := buildWorkflowParams(req.Workflow); wf != nil {
+		payload.Parameters.Workflow = wf
+	}
 
 	endpoint := c.baseURL + "/services/aigc/multimodal-generation/generation"
 	body, err := json.Marshal(payload)
@@ -301,4 +366,58 @@ func firstImageURL(resp generationResponse) string {
 		}
 	}
 	return ""
+}
+
+func encodeImageContent(src *SourceImage) *generationImage {
+	if src == nil {
+		return nil
+	}
+	if len(src.Data) == 0 && strings.TrimSpace(src.URL) == "" {
+		return nil
+	}
+	payload := &generationImage{}
+	if strings.TrimSpace(src.MIME) != "" {
+		payload.Format = strings.TrimPrefix(strings.ToLower(src.MIME), "image/")
+	}
+	if len(src.Data) > 0 {
+		payload.Data = base64.StdEncoding.EncodeToString(src.Data)
+		payload.Width = src.Width
+		payload.Height = src.Height
+	}
+	if payload.Format == "" && strings.TrimSpace(src.Filename) != "" {
+		if idx := strings.LastIndex(src.Filename, "."); idx > -1 && idx < len(src.Filename)-1 {
+			payload.Format = strings.TrimPrefix(strings.ToLower(src.Filename[idx+1:]), ".")
+		}
+	}
+	if strings.TrimSpace(src.URL) != "" {
+		payload.URL = strings.TrimSpace(src.URL)
+	}
+	if strings.TrimSpace(src.Filename) != "" {
+		payload.Name = strings.TrimSpace(src.Filename)
+	}
+	return payload
+}
+
+func buildWorkflowParams(cfg Workflow) *workflowParams {
+	mode := strings.TrimSpace(cfg.Mode)
+	if mode == "" || mode == "generate" {
+		return nil
+	}
+	params := &workflowParams{Mode: mode}
+	if cfg.BackgroundTheme != "" {
+		params.BackgroundTheme = strings.TrimSpace(cfg.BackgroundTheme)
+	}
+	if cfg.BackgroundStyle != "" {
+		params.BackgroundStyle = strings.TrimSpace(cfg.BackgroundStyle)
+	}
+	if cfg.EnhanceLevel != "" {
+		params.EnhanceLevel = strings.TrimSpace(cfg.EnhanceLevel)
+	}
+	if cfg.RetouchStrength != "" {
+		params.RetouchStrength = strings.TrimSpace(cfg.RetouchStrength)
+	}
+	if cfg.Notes != "" {
+		params.Notes = strings.TrimSpace(cfg.Notes)
+	}
+	return params
 }
