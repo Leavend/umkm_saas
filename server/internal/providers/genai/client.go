@@ -93,6 +93,15 @@ type geminiPart struct {
 	FileData   *geminiFileData   `json:"fileData,omitempty"`
 }
 
+type geminiTool struct {
+	ImageGeneration *geminiImageTool `json:"imageGeneration,omitempty"`
+	VideoGeneration *geminiVideoTool `json:"videoGeneration,omitempty"`
+}
+
+type geminiImageTool struct{}
+
+type geminiVideoTool struct{}
+
 type geminiInlineData struct {
 	MimeType string `json:"mimeType,omitempty"`
 	Data     string `json:"data,omitempty"`
@@ -110,8 +119,21 @@ type geminiGenerationConfig struct {
 
 type geminiGenerateContentRequest struct {
 	Contents         []geminiContent         `json:"contents"`
+	Tools            []geminiTool            `json:"tools,omitempty"`
+	ToolConfig       *geminiToolConfig       `json:"toolConfig,omitempty"`
 	GenerationConfig *geminiGenerationConfig `json:"generationConfig,omitempty"`
 }
+
+type geminiToolConfig struct {
+	ImageGenerationConfig *geminiImageGenerationConfig `json:"imageGenerationConfig,omitempty"`
+	VideoGenerationConfig *geminiVideoGenerationConfig `json:"videoGenerationConfig,omitempty"`
+}
+
+type geminiImageGenerationConfig struct {
+	NumberOfImages int `json:"numberOfImages,omitempty"`
+}
+
+type geminiVideoGenerationConfig struct{}
 
 type geminiCandidate struct {
 	Content      geminiContent `json:"content"`
@@ -282,9 +304,11 @@ func (c *Client) remoteGenerateImages(ctx context.Context, req ImageRequest) ([]
 				}},
 			},
 		},
-		GenerationConfig: &geminiGenerationConfig{
-			CandidateCount:   quantity,
-			ResponseMimeType: "image/png",
+		Tools: []geminiTool{{ImageGeneration: &geminiImageTool{}}},
+		ToolConfig: &geminiToolConfig{
+			ImageGenerationConfig: &geminiImageGenerationConfig{
+				NumberOfImages: quantity,
+			},
 		},
 	}
 
@@ -345,7 +369,7 @@ func (c *Client) remoteGenerateVideo(ctx context.Context, req VideoRequest) (*Vi
 				}},
 			},
 		},
-		GenerationConfig: &geminiGenerationConfig{ResponseMimeType: "video/mp4"},
+		Tools: []geminiTool{{VideoGeneration: &geminiVideoTool{}}},
 	}
 
 	var response geminiGenerateContentResponse
