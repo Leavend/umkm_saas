@@ -16,6 +16,7 @@ import (
 	"server/internal/http/httpapi"
 	"server/internal/infra"
 	"server/internal/middleware"
+	"server/internal/providers/genai"
 	"server/internal/providers/image"
 	videoprovider "server/internal/providers/video"
 	"server/internal/sqlinline"
@@ -37,11 +38,16 @@ func TestImagesGenerateIntegration(t *testing.T) {
 		RateLimitPerMin: 100,
 	}
 	logger := infra.NewLogger("test")
+	geminiClient, err := genai.NewClient(genai.Options{Model: "gemini-2.5-flash"})
+	if err != nil {
+		t.Fatalf("new gemini client: %v", err)
+	}
+
 	app := &handlers.App{
 		Config:         cfg,
 		Logger:         logger,
 		SQL:            runner,
-		ImageProviders: map[string]image.Generator{"gemini": image.NewNanoBanana()},
+		ImageProviders: map[string]image.Generator{"gemini": image.NewGeminiGenerator(geminiClient)},
 		VideoProviders: map[string]videoprovider.Generator{},
 		JWTSecret:      cfg.JWTSecret,
 	}
@@ -175,11 +181,16 @@ func TestImageJobAccessControl(t *testing.T) {
 		RateLimitPerMin: 100,
 	}
 	logger := infra.NewLogger("test")
+	geminiClient, err := genai.NewClient(genai.Options{Model: "gemini-2.5-flash"})
+	if err != nil {
+		t.Fatalf("new gemini client: %v", err)
+	}
+
 	app := &handlers.App{
 		Config:         cfg,
 		Logger:         logger,
 		SQL:            runner,
-		ImageProviders: map[string]image.Generator{"gemini": image.NewNanoBanana()},
+		ImageProviders: map[string]image.Generator{"gemini": image.NewGeminiGenerator(geminiClient)},
 		VideoProviders: map[string]videoprovider.Generator{},
 		JWTSecret:      cfg.JWTSecret,
 	}
