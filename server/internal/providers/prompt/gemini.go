@@ -31,32 +31,45 @@ type GeminiEnhancer struct {
 
 const (
 	geminiDefaultTimeout = 15 * time.Second
-	geminiDefaultModel   = "google/gemini-2.0-flash-exp:free"
-	geminiDefaultBaseURL = "https://openrouter.ai/api/v1"
+	geminiDefaultModel   = "gemini-2.5-flash"
+	geminiDefaultBaseURL = "https://generativelanguage.googleapis.com/v1beta"
 )
 
 type geminiRequest struct {
-	Model          string                `json:"model"`
-	Messages       []geminiMessage       `json:"messages"`
-	Temperature    float64               `json:"temperature,omitempty"`
-	ResponseFormat *geminiResponseFormat `json:"response_format,omitempty"`
+	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
+	Contents          []geminiContent         `json:"contents"`
+	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
 }
 
-type geminiMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+type geminiContent struct {
+	Role  string       `json:"role,omitempty"`
+	Parts []geminiPart `json:"parts"`
 }
 
-type geminiResponseFormat struct {
-	Type string `json:"type"`
+type geminiPart struct {
+	Text string `json:"text,omitempty"`
+}
+
+type geminiGenerationConfig struct {
+	Temperature      float64 `json:"temperature,omitempty"`
+	ResponseMimeType string  `json:"responseMimeType,omitempty"`
 }
 
 type geminiResponse struct {
-	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
+	Candidates []geminiCandidate `json:"candidates"`
+}
+
+type geminiCandidate struct {
+	FinishReason string        `json:"finishReason"`
+	Content      geminiContent `json:"content"`
+}
+
+type geminiErrorResponse struct {
+	Error struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Status  string `json:"status"`
+	} `json:"error"`
 }
 
 func NewGeminiEnhancer(opts GeminiOptions) (*GeminiEnhancer, error) {
@@ -90,47 +103,18 @@ func (g *GeminiEnhancer) Enhance(ctx context.Context, req EnhanceRequest) (*Enha
 		return g.useFallback(ctx, req, "missing_api_key", nil)
 	}
 	payload := geminiRequest{
-		Model:       g.model,
-		Temperature: 0.5,
-		ResponseFormat: &geminiResponseFormat{
-			Type: "json_object",
+		SystemInstruction: &geminiContent{Parts: []geminiPart{{Text: "You are a helpful marketing assistant that always responds with valid JSON."}}},
+		Contents: []geminiContent{
+			{Role: "user", Parts: []geminiPart{{Text: buildEnhancePromptPayload(req)}}},
 		},
-		Messages: []geminiMessage{
-			{Role: "system", Content: "You are a helpful marketing assistant that always responds with valid JSON."},
-			{Role: "user", Content: buildEnhancePromptPayload(req)},
+		GenerationConfig: &geminiGenerationConfig{
+			Temperature:      0.5,
+			ResponseMimeType: "application/json",
 		},
 	}
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
-		return g.useFallback(ctx, req, "encode_request", err)
-	}
-	endpoint := fmt.Sprintf("%s/chat/completions", g.baseURL)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &buf)
+	text, reason, err := g.call(ctx, payload)
 	if err != nil {
-		return g.useFallback(ctx, req, "build_request", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+g.apiKey)
-	resp, err := g.client.Do(httpReq)
-	if err != nil {
-		return g.useFallback(ctx, req, "http_request", err)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-	if resp.StatusCode >= 300 {
-		return g.useFallback(ctx, req, fmt.Sprintf("http_%d", resp.StatusCode), fmt.Errorf("gemini status %d", resp.StatusCode))
-	}
-	var out geminiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return g.useFallback(ctx, req, "decode_response", err)
-	}
-	if len(out.Choices) == 0 {
-		return g.useFallback(ctx, req, "empty_choices", errors.New("no choices"))
-	}
-	text := strings.TrimSpace(out.Choices[0].Message.Content)
-	if text == "" {
-		return g.useFallback(ctx, req, "empty_response", errors.New("empty response"))
+		return g.useFallback(ctx, req, reason, err)
 	}
 	parsed, err := parseModelPayload[modelEnhancePayload](text)
 	if err != nil {
@@ -167,47 +151,18 @@ func (g *GeminiEnhancer) Random(ctx context.Context, locale string) ([]EnhanceRe
 		return g.useFallbackRandom(ctx, locale, "missing_api_key", nil)
 	}
 	payload := geminiRequest{
-		Model:       g.model,
-		Temperature: 0.7,
-		ResponseFormat: &geminiResponseFormat{
-			Type: "json_object",
+		SystemInstruction: &geminiContent{Parts: []geminiPart{{Text: "You are a helpful marketing assistant that always responds with valid JSON."}}},
+		Contents: []geminiContent{
+			{Role: "user", Parts: []geminiPart{{Text: buildRandomPromptPayload(locale)}}},
 		},
-		Messages: []geminiMessage{
-			{Role: "system", Content: "You are a helpful marketing assistant that always responds with valid JSON."},
-			{Role: "user", Content: buildRandomPromptPayload(locale)},
+		GenerationConfig: &geminiGenerationConfig{
+			Temperature:      0.7,
+			ResponseMimeType: "application/json",
 		},
 	}
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
-		return g.useFallbackRandom(ctx, locale, "encode_request", err)
-	}
-	endpoint := fmt.Sprintf("%s/chat/completions", g.baseURL)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &buf)
+	text, reason, err := g.call(ctx, payload)
 	if err != nil {
-		return g.useFallbackRandom(ctx, locale, "build_request", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+g.apiKey)
-	resp, err := g.client.Do(httpReq)
-	if err != nil {
-		return g.useFallbackRandom(ctx, locale, "http_request", err)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-	if resp.StatusCode >= 300 {
-		return g.useFallbackRandom(ctx, locale, fmt.Sprintf("http_%d", resp.StatusCode), fmt.Errorf("gemini status %d", resp.StatusCode))
-	}
-	var out geminiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return g.useFallbackRandom(ctx, locale, "decode_response", err)
-	}
-	if len(out.Choices) == 0 {
-		return g.useFallbackRandom(ctx, locale, "empty_choices", errors.New("no choices"))
-	}
-	text := strings.TrimSpace(out.Choices[0].Message.Content)
-	if text == "" {
-		return g.useFallbackRandom(ctx, locale, "empty_response", errors.New("empty response"))
+		return g.useFallbackRandom(ctx, locale, reason, err)
 	}
 	parsed, err := parseModelPayload[modelRandomPayload](text)
 	if err != nil {
@@ -296,6 +251,53 @@ func (g *GeminiEnhancer) emitFallback(reason string, err error) {
 	if g.onFallback != nil {
 		g.onFallback(reason, err)
 	}
+}
+
+func (g *GeminiEnhancer) call(ctx context.Context, payload geminiRequest) (string, string, error) {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
+		return "", "encode_request", err
+	}
+	endpoint := fmt.Sprintf("%s/models/%s:generateContent?key=%s", g.baseURL, url.PathEscape(g.model), url.QueryEscape(g.apiKey))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &buf)
+	if err != nil {
+		return "", "build_request", err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := g.client.Do(httpReq)
+	if err != nil {
+		return "", "http_request", err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode >= 300 {
+		var apiErr geminiErrorResponse
+		if err := json.NewDecoder(resp.Body).Decode(&apiErr); err == nil && apiErr.Error.Message != "" {
+			return "", fmt.Sprintf("http_%d", resp.StatusCode), fmt.Errorf("gemini status %d: %s", resp.StatusCode, apiErr.Error.Message)
+		}
+		return "", fmt.Sprintf("http_%d", resp.StatusCode), fmt.Errorf("gemini status %d", resp.StatusCode)
+	}
+	var out geminiResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", "decode_response", err
+	}
+	if len(out.Candidates) == 0 {
+		return "", "empty_candidates", errors.New("no candidates returned")
+	}
+	candidate := out.Candidates[0]
+	finishReason := strings.ToLower(strings.TrimSpace(candidate.FinishReason))
+	switch finishReason {
+	case "", "stop", "finish_reason_unspecified":
+	default:
+		return "", "finish_" + finishReason, fmt.Errorf("gemini finish reason %s", candidate.FinishReason)
+	}
+	for _, part := range candidate.Content.Parts {
+		if text := strings.TrimSpace(part.Text); text != "" {
+			return text, "", nil
+		}
+	}
+	return "", "empty_response", errors.New("empty response")
 }
 
 var _ Enhancer = (*GeminiEnhancer)(nil)
