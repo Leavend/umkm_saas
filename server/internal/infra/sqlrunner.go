@@ -79,7 +79,11 @@ type loggingRow struct {
 func (l loggingRow) Scan(dest ...any) error {
 	err := l.row.Scan(dest...)
 	if err != nil {
-		l.logger.Error().Err(err).Msgf("sql[%s] scan error", l.marker)
+		if IsNoRows(err) {
+			l.logger.Debug().Msgf("sql[%s] no rows", l.marker)
+		} else {
+			l.logger.Error().Err(err).Msgf("sql[%s] scan error", l.marker)
+		}
 	}
 	return err
 }

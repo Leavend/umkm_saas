@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"server/internal/http/handlers"
@@ -23,6 +24,11 @@ func NewRouter(app *handlers.App) http.Handler {
 	r.Use(middleware.I18N("en", geoLookup))
 	r.Use(middleware.CORS([]string{"http://localhost:3000", "https://script.google.com"}))
 	r.Use(middleware.RateLimit(app.Config.RateLimitPerMin, time.Minute))
+
+	if base := strings.TrimSpace(app.Config.StoragePath); base != "" {
+		fs := http.StripPrefix("/static/", http.FileServer(http.Dir(base)))
+		r.Handle("/static/*", fs)
+	}
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Get("/healthz", app.Health)

@@ -12,6 +12,7 @@ import (
 	"server/internal/infra/geoip"
 	googleauth "server/internal/infra/google"
 	"server/internal/middleware"
+	"server/internal/providers/genai"
 	"server/internal/providers/image"
 	"server/internal/providers/prompt"
 	"server/internal/providers/video"
@@ -154,6 +155,24 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 		logger.Warn().Str("provider", providerChoice).Msg("unknown prompt provider; using static prompts")
 	}
 
+	geminiClient, err := genai.NewClient(genai.Options{
+		APIKey:     geminiKey,
+		BaseURL:    cfg.GeminiBaseURL,
+		Model:      cfg.GeminiModel,
+		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+		Logger:     &logger,
+	})
+	if err != nil {
+		logger.Fatal().Err(err).Msg("failed to configure gemini client")
+	}
+
+	if geminiKey == "" {
+		logger.Warn().Str("model", geminiClient.Model()).Msg("gemini api key missing; synthetic media assets will be generated")
+	}
+
+	geminiImage := image.NewGeminiGenerator(geminiClient)
+	geminiVideo := video.NewGeminiGenerator(geminiClient)
+
 	return &App{
 		Config:         cfg,
 		Logger:         logger,
@@ -163,12 +182,16 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 		GoogleVerifier: googleauth.NewVerifier(cfg.GoogleIssuer, cfg.GoogleClientID),
 		PromptEnhancer: promptProvider,
 		ImageProviders: map[string]image.Generator{
-			"gemini":     image.NewNanoBanana(),
-			"nanobanana": image.NewNanoBanana(),
+			"gemini":           geminiImage,
+			"gemini-1.5-flash": geminiImage,
+			"gemini-2.0-flash": geminiImage,
+			"gemini-2.5-flash": geminiImage,
 		},
 		VideoProviders: map[string]video.Generator{
-			"veo2": video.NewVEO(),
-			"veo3": video.NewVEO(),
+			"gemini":           geminiVideo,
+			"gemini-1.5-flash": geminiVideo,
+			"gemini-2.0-flash": geminiVideo,
+			"gemini-2.5-flash": geminiVideo,
 		},
 		JWTSecret: cfg.JWTSecret,
 	}
@@ -190,6 +213,20 @@ func (a *App) error(w http.ResponseWriter, status int, code, message string) {
 			"message": message,
 		},
 	})
+}
+
+func (a *App) assetURL(storageKey string) string {
+	storageKey = strings.TrimSpace(storageKey)
+	if storageKey == "" {
+		return ""
+	}
+	lower := strings.ToLower(storageKey)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "data:") {
+		return storageKey
+	}
+	base := strings.TrimRight(a.Config.StorageBaseURL, "/")
+	key := strings.TrimLeft(storageKey, "/")
+	return base + "/" + key
 }
 
 func (a *App) currentUserID(r *http.Request) string {

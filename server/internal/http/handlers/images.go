@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -190,13 +192,35 @@ func (a *App) ImageZip(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&id, &storageKey, &mime, &bytes, &width, &height, &aspect, &props, &createdAt); err != nil {
 			continue
 		}
-		assets = append(assets, zip.Asset{Filename: fmt.Sprintf("%s-%s", jobID, id), MIME: mime, URL: storageKey})
+		data := loadAssetData(a.Config.StoragePath, storageKey)
+		assets = append(assets, zip.Asset{Filename: fmt.Sprintf("%s-%s", jobID, id), MIME: mime, Data: data})
 	}
 	archive := zip.ArchiveAssets(assets)
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=job-%s.zip", jobID))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(archive)
+}
+
+func loadAssetData(basePath, storageKey string) []byte {
+	storageKey = strings.TrimSpace(storageKey)
+	if storageKey == "" {
+		return nil
+	}
+	lower := strings.ToLower(storageKey)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "data:") {
+		return []byte(storageKey)
+	}
+	basePath = strings.TrimSpace(basePath)
+	if basePath == "" {
+		return nil
+	}
+	path := filepath.Join(basePath, filepath.FromSlash(strings.TrimLeft(storageKey, "/")))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 func (a *App) ImagesEnhance(w http.ResponseWriter, r *http.Request) {

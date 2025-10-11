@@ -3,13 +3,12 @@ package zip
 import (
 	"archive/zip"
 	"bytes"
-	"io"
 )
 
 type Asset struct {
 	Filename string
 	MIME     string
-	URL      string
+	Data     []byte
 }
 
 func ArchiveAssets(assets []Asset) []byte {
@@ -20,7 +19,7 @@ func ArchiveAssets(assets []Asset) []byte {
 		if err != nil {
 			continue
 		}
-		if _, err := io.WriteString(w, asset.URL); err != nil {
+		if _, err := w.Write(asset.Data); err != nil {
 			return nil
 		}
 	}

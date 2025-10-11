@@ -74,6 +74,5 @@ func (a *App) DownloadAsset(w http.ResponseWriter, r *http.Request) {
 		a.error(w, http.StatusForbidden, "forbidden", "not your asset")
 		return
 	}
-	signedURL := a.Config.StorageBaseURL + "/" + storageKey
-	a.json(w, http.StatusOK, map[string]any{"url": signedURL, "mime": mime})
+	a.json(w, http.StatusOK, map[string]any{"url": a.assetURL(storageKey), "mime": mime})
 }

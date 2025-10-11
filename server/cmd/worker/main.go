@@ -5,16 +5,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"server/internal/domain/jsoncfg"
 	"server/internal/infra"
+	"server/internal/infra/credentials"
+	"server/internal/providers/genai"
 	"server/internal/providers/image"
 	videoprovider "server/internal/providers/video"
 	"server/internal/sqlinline"
+	"server/internal/storage"
 )
 
 const (
@@ -24,8 +30,8 @@ const (
 	statusSucceeded = "SUCCEEDED"
 	statusFailed    = "FAILED"
 
-	defaultImageProvider = "gemini"
-	defaultVideoProvider = "veo2"
+	defaultImageProvider = "gemini-2.5-flash"
+	defaultVideoProvider = "gemini-2.5-flash"
 
 	jobPollInterval = 2 * time.Second
 )
@@ -46,6 +52,7 @@ type jobWorker struct {
 	logger         infra.Logger
 	imageProviders map[string]image.Generator
 	videoProviders map[string]videoprovider.Generator
+	store          *storage.FileStore
 }
 
 var errNoJobAvailable = errors.New("no job available")
@@ -66,12 +73,56 @@ func main() {
 	}
 	defer pool.Close()
 
+	runner := infra.NewSQLRunner(pool, logger)
+
+	storagePath := cfg.StoragePath
+	if storagePath == "" {
+		storagePath = "./storage"
+	}
+	if !filepath.IsAbs(storagePath) {
+		if abs, err := filepath.Abs(storagePath); err == nil {
+			storagePath = abs
+		}
+	}
+	fileStore, err := storage.NewFileStore(storagePath)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("worker: failed to configure storage")
+	}
+
+	geminiAPIKey := strings.TrimSpace(cfg.GeminiAPIKey)
+	if geminiAPIKey == "" {
+		credStore := credentials.NewStore(runner)
+		keyFromStore, err := credStore.GeminiAPIKey(ctx)
+		if err != nil {
+			logger.Warn().Err(err).Msg("worker: failed to load gemini api key from store")
+		} else {
+			geminiAPIKey = keyFromStore
+		}
+	}
+
+	httpClient := &http.Client{Timeout: 60 * time.Second}
+	geminiClient, err := genai.NewClient(genai.Options{
+		APIKey:     geminiAPIKey,
+		BaseURL:    cfg.GeminiBaseURL,
+		Model:      cfg.GeminiModel,
+		HTTPClient: httpClient,
+		Logger:     &logger,
+	})
+	if err != nil {
+		logger.Fatal().Err(err).Msg("worker: failed to configure gemini client")
+	}
+
+	if geminiAPIKey == "" {
+		logger.Warn().Str("model", geminiClient.Model()).Msg("worker: gemini api key missing, using synthetic asset generation")
+	}
+
 	worker := &jobWorker{
 		ctx:            ctx,
-		runner:         infra.NewSQLRunner(pool, logger),
+		runner:         runner,
 		logger:         logger,
-		imageProviders: initImageProviders(),
-		videoProviders: initVideoProviders(),
+		imageProviders: initImageProviders(geminiClient),
+		videoProviders: initVideoProviders(geminiClient),
+		store:          fileStore,
 	}
 
 	if err := worker.Run(); err != nil && !errors.Is(err, context.Canceled) {
@@ -80,17 +131,23 @@ func main() {
 	logger.Info().Msg("worker: stopped")
 }
 
-func initImageProviders() map[string]image.Generator {
+func initImageProviders(client *genai.Client) map[string]image.Generator {
+	gemini := image.NewGeminiGenerator(client)
 	return map[string]image.Generator{
-		"gemini":     image.NewNanoBanana(),
-		"nanobanana": image.NewNanoBanana(),
+		"gemini":           gemini,
+		"gemini-1.5-flash": gemini,
+		"gemini-2.0-flash": gemini,
+		"gemini-2.5-flash": gemini,
 	}
 }
 
-func initVideoProviders() map[string]videoprovider.Generator {
+func initVideoProviders(client *genai.Client) map[string]videoprovider.Generator {
+	gemini := videoprovider.NewGeminiGenerator(client)
 	return map[string]videoprovider.Generator{
-		"veo2": videoprovider.NewVEO(),
-		"veo3": videoprovider.NewVEO(),
+		"gemini":           gemini,
+		"gemini-1.5-flash": gemini,
+		"gemini-2.0-flash": gemini,
+		"gemini-2.5-flash": gemini,
 	}
 }
 
@@ -182,17 +239,28 @@ func (w *jobWorker) processImageJob(j job) error {
 	if err != nil {
 		return fmt.Errorf("image generation: %w", err)
 	}
-	metadata := map[string]any{"provider": provider}
-	for _, asset := range assets {
+	for idx, asset := range assets {
+		storageKey, size := w.persistAsset(j.ID, provider, asset.Format, asset.StorageKey, asset.URL, asset.Data, idx)
+		if storageKey == "" {
+			w.logger.Error().Str("job_id", j.ID).Msg("worker: image asset missing storage key")
+			continue
+		}
+		metadata := map[string]any{"provider": provider}
+		if asset.URL != "" && asset.URL != storageKey {
+			metadata["source_url"] = asset.URL
+		}
+		if len(asset.Data) == 0 && size == 0 {
+			size = 1024 * 1024
+		}
 		if _, execErr := w.runner.Exec(
 			w.ctx,
 			sqlinline.QInsertAsset,
 			j.UserID,
 			"GENERATED",
 			j.ID,
-			asset.URL,
+			storageKey,
 			asset.Format,
-			int64(1024*1024),
+			size,
 			asset.Width,
 			asset.Height,
 			j.Aspect,
@@ -228,16 +296,29 @@ func (w *jobWorker) processVideoJob(j job) error {
 	if err != nil {
 		return fmt.Errorf("video generation: %w", err)
 	}
+	storageKey, size := w.persistAsset(j.ID, provider, asset.Format, asset.StorageKey, asset.URL, asset.Data, 0)
+	if storageKey == "" {
+		return fmt.Errorf("video asset missing storage key")
+	}
+	if size == 0 {
+		size = int64(len(asset.Data))
+	}
+	if size == 0 {
+		size = int64(5 * 1024 * 1024)
+	}
 	metadata := map[string]any{"provider": provider, "length": asset.Length}
+	if asset.URL != "" && asset.URL != storageKey {
+		metadata["source_url"] = asset.URL
+	}
 	if _, execErr := w.runner.Exec(
 		w.ctx,
 		sqlinline.QInsertAsset,
 		j.UserID,
 		"GENERATED",
 		j.ID,
-		asset.URL,
+		storageKey,
 		asset.Format,
-		int64(5*1024*1024),
+		size,
 		1920,
 		1080,
 		j.Aspect,
@@ -286,4 +367,85 @@ func extractPromptText(payload map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func (w *jobWorker) persistAsset(jobID, provider, mime, storageKey, sourceURL string, data []byte, index int) (string, int64) {
+	key := strings.TrimSpace(storageKey)
+	if key == "" {
+		key = strings.TrimSpace(sourceURL)
+	}
+	var size int64
+	if len(data) > 0 {
+		size = int64(len(data))
+	}
+	if w.store != nil && len(data) > 0 {
+		targetKey := key
+		if targetKey == "" || strings.HasPrefix(targetKey, "http://") || strings.HasPrefix(targetKey, "https://") {
+			targetKey = defaultStorageKey(jobID, mime, index)
+		}
+		targetKey = ensureExtension(targetKey, mime)
+		savedKey, err := w.store.Write(w.ctx, targetKey, data)
+		if err != nil {
+			w.logger.Warn().Err(err).
+				Str("job_id", jobID).
+				Str("provider", provider).
+				Msg("worker: persist asset to storage failed")
+		} else {
+			key = savedKey
+		}
+	}
+	return key, size
+}
+
+func defaultStorageKey(jobID, mime string, index int) string {
+	category := "images"
+	prefix := "image"
+	if strings.HasPrefix(mime, "video/") {
+		category = "videos"
+		prefix = "video"
+	}
+	if index < 0 {
+		index = 0
+	}
+	ext := extensionForMIME(mime)
+	if ext == "" {
+		ext = ".bin"
+	}
+	if category == "videos" {
+		return fmt.Sprintf("generated/%s/%s/%s%s", category, jobID, prefix, ext)
+	}
+	return fmt.Sprintf("generated/%s/%s/%s-%02d%s", category, jobID, prefix, index+1, ext)
+}
+
+func ensureExtension(key, mime string) string {
+	if key == "" {
+		return key
+	}
+	expected := extensionForMIME(mime)
+	if expected == "" {
+		return key
+	}
+	ext := strings.ToLower(filepath.Ext(key))
+	if ext == expected {
+		return key
+	}
+	if ext == "" {
+		return key + expected
+	}
+	return key
+}
+
+func extensionForMIME(mime string) string {
+	switch strings.ToLower(strings.TrimSpace(mime)) {
+	case "image/png":
+		return ".png"
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "video/mp4":
+		return ".mp4"
+	case "text/plain":
+		return ".txt"
+	default:
+		return ""
+	}
 }
