@@ -44,7 +44,7 @@ func LoadConfig() (*Config, error) {
 		GoogleIssuer:     getEnv("GOOGLE_ISSUER", "https://accounts.google.com"),
 		PromptProvider:   getEnv("PROMPT_PROVIDER", "gemini"),
 		GeminiAPIKey:     os.Getenv("GEMINI_API_KEY"),
-		GeminiModel:      getEnv("GEMINI_MODEL", "gemini-1.5-flash"),
+		GeminiModel:      getEnv("GEMINI_MODEL", "gemini-2.5-flash"),
 		GeminiBaseURL:    getEnv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"),
 		OpenAIAPIKey:     os.Getenv("OPENAI_API_KEY"),
 		OpenAIModel:      getEnv("OPENAI_MODEL", "gpt-4o-mini"),

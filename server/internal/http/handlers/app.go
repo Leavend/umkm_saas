@@ -78,7 +78,7 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 			HTTPClient:   &http.Client{Timeout: 15 * time.Second},
 			Fallback:     staticEnhancer,
 			OnFallback: func(reason string, err error) {
-				evt := logger.Warn().Str("provider", credentials.ProviderOpenAI).Str("reason", reason)
+				evt := logger.Info().Str("provider", credentials.ProviderOpenAI).Str("reason", reason)
 				if err != nil {
 					evt = evt.Err(err)
 				}
@@ -113,7 +113,7 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 			HTTPClient: &http.Client{Timeout: 15 * time.Second},
 			Fallback:   geminiFallback,
 			OnFallback: func(reason string, err error) {
-				evt := logger.Warn().Str("provider", credentials.ProviderGemini).Str("reason", reason)
+				evt := logger.Info().Str("provider", credentials.ProviderGemini).Str("reason", reason)
 				if err != nil {
 					evt = evt.Err(err)
 				}
