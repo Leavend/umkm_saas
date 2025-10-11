@@ -1,10 +1,15 @@
 package genai
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"io"
 	"net/http"
 	"net/url"
@@ -58,17 +63,21 @@ type VideoRequest struct {
 
 // ImageAsset is the normalized representation returned by the Gemini client.
 type ImageAsset struct {
-	URL    string
-	Format string
-	Width  int
-	Height int
+	StorageKey string
+	URL        string
+	Format     string
+	Width      int
+	Height     int
+	Data       []byte
 }
 
 // VideoAsset is the normalized representation of a generated video.
 type VideoAsset struct {
-	URL    string
-	Format string
-	Length int
+	StorageKey string
+	URL        string
+	Format     string
+	Length     int
+	Data       []byte
 }
 
 // NewClient constructs a Gemini client with sane defaults. Callers may provide
@@ -130,11 +139,15 @@ func (c *Client) GenerateImages(ctx context.Context, req ImageRequest) ([]ImageA
 	assets := make([]ImageAsset, quantity)
 	for i := 0; i < quantity; i++ {
 		seed := deterministicSeed(req.RequestID, req.Prompt, req.Locale, req.WatermarkTag, i)
+		storageKey := syntheticStorageKey("image", c.model, seed, i+1, "png")
+		img := renderSyntheticImage(width, height, seed, req.Prompt)
 		assets[i] = ImageAsset{
-			URL:    c.syntheticURL("image", seed, i+1, "png"),
-			Format: "image/png",
-			Width:  width,
-			Height: height,
+			StorageKey: storageKey,
+			URL:        c.assetURL(storageKey),
+			Format:     "image/png",
+			Width:      width,
+			Height:     height,
+			Data:       img,
 		}
 	}
 
@@ -154,10 +167,13 @@ func (c *Client) GenerateVideo(ctx context.Context, req VideoRequest) (*VideoAss
 	}
 
 	seed := deterministicSeed(req.RequestID, req.Prompt, req.Locale, c.model, 0)
+	storageKey := syntheticStorageKey("video", c.model, seed, 1, "mp4")
 	asset := &VideoAsset{
-		URL:    c.syntheticURL("video", seed, 1, "mp4"),
-		Format: "video/mp4",
-		Length: estimateVideoLength(req.Prompt),
+		StorageKey: storageKey,
+		URL:        c.assetURL(storageKey),
+		Format:     "video/mp4",
+		Length:     estimateVideoLength(req.Prompt),
+		Data:       renderSyntheticVideo(seed, req.Prompt),
 	}
 
 	c.logger.Debug().
@@ -168,10 +184,95 @@ func (c *Client) GenerateVideo(ctx context.Context, req VideoRequest) (*VideoAss
 	return asset, nil
 }
 
-func (c *Client) syntheticURL(kind, seed string, index int, ext string) string {
-	escapedModel := url.PathEscape(c.model)
+func (c *Client) assetURL(storageKey string) string {
+	if storageKey == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s", strings.TrimRight(c.baseURL, "/"), strings.TrimLeft(storageKey, "/"))
+}
+
+func syntheticStorageKey(kind, model, seed string, index int, ext string) string {
+	escapedModel := url.PathEscape(model)
 	escapedKind := url.PathEscape(kind)
-	return fmt.Sprintf("%s/synthetic/%s/%s/%02d.%s", c.baseURL, escapedModel, escapedKind+"-"+seed, index, ext)
+	return fmt.Sprintf("synthetic/%s/%s-%s/%02d.%s", escapedModel, escapedKind, seed, index, ext)
+}
+
+func renderSyntheticImage(width, height int, seed, prompt string) []byte {
+	if width <= 0 {
+		width = 1024
+	}
+	if height <= 0 {
+		height = 1024
+	}
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	base := colorFromSeed(seed, 0)
+	accent := colorFromSeed(seed, 1)
+	draw.Draw(img, img.Bounds(), &image.Uniform{base}, image.Point{}, draw.Src)
+
+	stripeHeight := maxInt(32, height/12)
+	for y := 0; y < height; y += stripeHeight * 2 {
+		stripe := image.Rect(0, y, width, minInt(height, y+stripeHeight))
+		draw.Draw(img, stripe, &image.Uniform{accent}, image.Point{}, draw.Over)
+	}
+
+	diagonal := colorFromSeed(seed, 2)
+	for i := 0; i < maxInt(width, height); i += maxInt(16, width/32) {
+		x := i
+		for y := 0; y < height; y++ {
+			xx := x + y
+			if xx >= width {
+				break
+			}
+			img.Set(xx, y, diagonal)
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil
+	}
+	return buf.Bytes()
+}
+
+func renderSyntheticVideo(seed, prompt string) []byte {
+	lines := []string{
+		"Synthetic Gemini video placeholder", fmt.Sprintf("Seed: %s", seed), fmt.Sprintf("Prompt: %s", strings.TrimSpace(prompt)), "", "This placeholder represents where rendered video bytes would be stored once the", "Gemini video API integration is enabled."}
+	return []byte(strings.Join(lines, "\n"))
+}
+
+func colorFromSeed(seed string, shift int) color.RGBA {
+	if seed == "" {
+		seed = "000000"
+	}
+	doubled := seed + seed
+	start := (shift * 6) % len(seed)
+	segment := doubled[start : start+6]
+	r := mustParseHexByte(segment[0:2])
+	g := mustParseHexByte(segment[2:4])
+	b := mustParseHexByte(segment[4:6])
+	return color.RGBA{R: r, G: g, B: b, A: 255}
+}
+
+func mustParseHexByte(s string) uint8 {
+	v, err := strconv.ParseUint(s, 16, 8)
+	if err != nil {
+		return 0
+	}
+	return uint8(v)
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func deterministicSeed(parts ...any) string {

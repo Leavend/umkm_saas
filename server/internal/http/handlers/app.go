@@ -215,6 +215,20 @@ func (a *App) error(w http.ResponseWriter, status int, code, message string) {
 	})
 }
 
+func (a *App) assetURL(storageKey string) string {
+	storageKey = strings.TrimSpace(storageKey)
+	if storageKey == "" {
+		return ""
+	}
+	lower := strings.ToLower(storageKey)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "data:") {
+		return storageKey
+	}
+	base := strings.TrimRight(a.Config.StorageBaseURL, "/")
+	key := strings.TrimLeft(storageKey, "/")
+	return base + "/" + key
+}
+
 func (a *App) currentUserID(r *http.Request) string {
 	return middleware.UserIDFromContext(r.Context())
 }

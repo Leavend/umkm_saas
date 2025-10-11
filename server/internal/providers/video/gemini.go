@@ -14,9 +14,11 @@ type GenerateRequest struct {
 }
 
 type Asset struct {
-	URL    string
-	Format string
-	Length int
+	StorageKey string
+	URL        string
+	Format     string
+	Length     int
+	Data       []byte
 }
 
 type Generator interface {
@@ -41,9 +43,11 @@ func (g *GeminiGenerator) Generate(ctx context.Context, req GenerateRequest) (*A
 		return nil, err
 	}
 	return &Asset{
-		URL:    asset.URL,
-		Format: asset.Format,
-		Length: asset.Length,
+		StorageKey: asset.StorageKey,
+		URL:        asset.URL,
+		Format:     asset.Format,
+		Length:     asset.Length,
+		Data:       asset.Data,
 	}, nil
 }
 

@@ -14,6 +14,7 @@ type Config struct {
 	DatabaseURL      string
 	JWTSecret        string
 	StorageBaseURL   string
+	StoragePath      string
 	GeoIPDBPath      string
 	GoogleClientID   string
 	GoogleIssuer     string
@@ -39,6 +40,7 @@ func LoadConfig() (*Config, error) {
 		DatabaseURL:      os.Getenv("DATABASE_URL"),
 		JWTSecret:        os.Getenv("JWT_SECRET"),
 		StorageBaseURL:   getEnv("STORAGE_BASE_URL", "http://localhost:8080/static"),
+		StoragePath:      getEnv("STORAGE_PATH", "./storage"),
 		GeoIPDBPath:      os.Getenv("GEOIP_DB_PATH"),
 		GoogleClientID:   os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleIssuer:     getEnv("GOOGLE_ISSUER", "https://accounts.google.com"),

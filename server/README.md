@@ -10,7 +10,7 @@ Backend service for "Food Photography Naik Kelas" that exposes REST API with inl
 ## Setup
 ```bash
 cp .env.example .env
-# edit DATABASE_URL, JWT_SECRET, GOOGLE_CLIENT_ID, GOOGLE_ISSUER, STORAGE_BASE_URL
+# edit DATABASE_URL, JWT_SECRET, GOOGLE_CLIENT_ID, GOOGLE_ISSUER, STORAGE_BASE_URL, STORAGE_PATH
 # download Go modules (requires internet access)
 go mod tidy
 # prepare database schema
@@ -39,7 +39,10 @@ make worker # starts background worker processing generation jobs
 The worker and HTTP layer both delegate image & video generation to the
 Gemini **2.5 Flash** provider. When no `GEMINI_API_KEY` is configured the
 provider emits deterministic synthetic assets so the end-to-end pipeline remains
-testable without external calls.
+testable without external calls. Synthetic results are written under
+`$STORAGE_PATH` (default `./storage`) and exposed through `/static/...` URLs,
+allowing clients to download the placeholder files returned by
+`/v1/assets/{id}/download` immediately.
 
 ## Verification
 ```bash

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -36,6 +38,8 @@ func TestImagesGenerateIntegration(t *testing.T) {
 		AppEnv:          "test",
 		JWTSecret:       "test-secret",
 		RateLimitPerMin: 100,
+		StorageBaseURL:  "http://localhost:8080/static",
+		StoragePath:     t.TempDir(),
 	}
 	logger := infra.NewLogger("test")
 	geminiClient, err := genai.NewClient(genai.Options{Model: "gemini-2.5-flash"})
@@ -147,8 +151,21 @@ func TestImagesGenerateIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate assets: %v", err)
 	}
-	for _, asset := range assets {
-		if _, execErr := runner.Exec(ctx, sqlinline.QInsertAsset, claimed, "GENERATED", jobID, asset.URL, asset.Format, int64(1024*1024), asset.Width, asset.Height, aspect, jsoncfg.MustMarshal(map[string]any{"provider": provider})); execErr != nil {
+	for idx, asset := range assets {
+		storageKey := asset.StorageKey
+		if storageKey == "" {
+			storageKey = fmt.Sprintf("generated/images/%s/%02d.png", jobID, idx+1)
+		}
+		if len(asset.Data) > 0 {
+			path := filepath.Join(cfg.StoragePath, filepath.FromSlash(storageKey))
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatalf("mkdir asset dir: %v", err)
+			}
+			if err := os.WriteFile(path, asset.Data, 0o644); err != nil {
+				t.Fatalf("write asset: %v", err)
+			}
+		}
+		if _, execErr := runner.Exec(ctx, sqlinline.QInsertAsset, claimed, "GENERATED", jobID, storageKey, asset.Format, int64(len(asset.Data)), asset.Width, asset.Height, aspect, jsoncfg.MustMarshal(map[string]any{"provider": provider})); execErr != nil {
 			t.Fatalf("insert asset: %v", execErr)
 		}
 	}
@@ -175,10 +192,13 @@ func TestImageJobAccessControl(t *testing.T) {
 	runner.addUser(ownerID, 2)
 	runner.addUser(otherID, 2)
 
+	storageDir := t.TempDir()
 	cfg := &infra.Config{
 		AppEnv:          "test",
 		JWTSecret:       "test-secret",
 		RateLimitPerMin: 100,
+		StorageBaseURL:  "http://localhost:8080/static",
+		StoragePath:     storageDir,
 	}
 	logger := infra.NewLogger("test")
 	geminiClient, err := genai.NewClient(genai.Options{Model: "gemini-2.5-flash"})
