@@ -62,7 +62,7 @@ func (a *App) ImagesGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	provider := req.Provider
 	if provider == "" {
-		provider = "gemini"
+		provider = "qwen-image-plus"
 	}
 	if _, ok := a.ImageProviders[provider]; !ok {
 		a.error(w, http.StatusBadRequest, "bad_request", "unsupported provider")

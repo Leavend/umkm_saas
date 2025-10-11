@@ -7,13 +7,15 @@ import (
 )
 
 type GenerateRequest struct {
-	Prompt       string
-	Quantity     int
-	AspectRatio  string
-	Provider     string
-	RequestID    string
-	Locale       string
-	WatermarkTag string
+	Prompt         string
+	Quantity       int
+	AspectRatio    string
+	Provider       string
+	RequestID      string
+	Locale         string
+	WatermarkTag   string
+	Quality        string
+	NegativePrompt string
 }
 
 type Asset struct {

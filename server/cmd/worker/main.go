@@ -18,6 +18,7 @@ import (
 	"server/internal/infra/credentials"
 	"server/internal/providers/genai"
 	"server/internal/providers/image"
+	"server/internal/providers/qwen"
 	videoprovider "server/internal/providers/video"
 	"server/internal/sqlinline"
 	"server/internal/storage"
@@ -30,7 +31,7 @@ const (
 	statusSucceeded = "SUCCEEDED"
 	statusFailed    = "FAILED"
 
-	defaultImageProvider = "gemini-2.5-flash"
+	defaultImageProvider = "qwen-image-plus"
 	defaultVideoProvider = "gemini-2.5-flash"
 
 	jobPollInterval = 2 * time.Second
@@ -89,9 +90,20 @@ func main() {
 		logger.Fatal().Err(err).Msg("worker: failed to configure storage")
 	}
 
+	credStore := credentials.NewStore(runner)
+
+	qwenAPIKey := strings.TrimSpace(cfg.QwenAPIKey)
+	if qwenAPIKey == "" {
+		keyFromStore, err := credStore.QwenAPIKey(ctx)
+		if err != nil {
+			logger.Warn().Err(err).Msg("worker: failed to load qwen api key from store")
+		} else {
+			qwenAPIKey = keyFromStore
+		}
+	}
+
 	geminiAPIKey := strings.TrimSpace(cfg.GeminiAPIKey)
 	if geminiAPIKey == "" {
-		credStore := credentials.NewStore(runner)
 		keyFromStore, err := credStore.GeminiAPIKey(ctx)
 		if err != nil {
 			logger.Warn().Err(err).Msg("worker: failed to load gemini api key from store")
@@ -116,11 +128,29 @@ func main() {
 		logger.Warn().Str("model", geminiClient.Model()).Msg("worker: gemini api key missing, using synthetic asset generation")
 	}
 
+	qwenClient, err := qwen.NewClient(qwen.Options{
+		APIKey:         qwenAPIKey,
+		BaseURL:        cfg.QwenBaseURL,
+		Model:          cfg.QwenModel,
+		DefaultSize:    cfg.QwenDefaultSize,
+		PromptExtend:   true,
+		Watermark:      false,
+		HTTPClient:     httpClient,
+		Logger:         &logger,
+		RequestTimeout: 45 * time.Second,
+	})
+	if err != nil {
+		logger.Fatal().Err(err).Msg("worker: failed to configure qwen client")
+	}
+	if !qwenClient.HasCredentials() {
+		logger.Warn().Str("model", qwenClient.Model()).Msg("worker: qwen api key missing, falling back to synthetic assets")
+	}
+
 	worker := &jobWorker{
 		ctx:            ctx,
 		runner:         runner,
 		logger:         logger,
-		imageProviders: initImageProviders(geminiClient),
+		imageProviders: initImageProviders(qwenClient, geminiClient),
 		videoProviders: initVideoProviders(geminiClient),
 		store:          fileStore,
 	}
@@ -131,14 +161,25 @@ func main() {
 	logger.Info().Msg("worker: stopped")
 }
 
-func initImageProviders(client *genai.Client) map[string]image.Generator {
-	gemini := image.NewGeminiGenerator(client)
-	return map[string]image.Generator{
+func initImageProviders(qwenClient *qwen.Client, geminiClient *genai.Client) map[string]image.Generator {
+	gemini := image.NewGeminiGenerator(geminiClient)
+	qwen := image.NewQwenGenerator(qwenClient, gemini)
+	providers := map[string]image.Generator{
+		"qwen":             qwen,
+		"qwen-image":       qwen,
+		"qwen-image-plus":  qwen,
 		"gemini":           gemini,
 		"gemini-1.5-flash": gemini,
 		"gemini-2.0-flash": gemini,
 		"gemini-2.5-flash": gemini,
 	}
+	if qwenClient != nil {
+		providers[strings.ToLower(qwenClient.Model())] = qwen
+	}
+	if geminiClient != nil {
+		providers[strings.ToLower(geminiClient.Model())] = gemini
+	}
+	return providers
 }
 
 func initVideoProviders(client *genai.Client) map[string]videoprovider.Generator {
@@ -228,13 +269,15 @@ func (w *jobWorker) processImageJob(j job) error {
 		return fmt.Errorf("image provider %q not configured", provider)
 	}
 	assets, err := generator.Generate(w.ctx, image.GenerateRequest{
-		Prompt:       prompt.Title,
-		Quantity:     j.Quantity,
-		AspectRatio:  j.Aspect,
-		Provider:     provider,
-		RequestID:    j.ID,
-		Locale:       prompt.Extras.Locale,
-		WatermarkTag: prompt.Watermark.Text,
+		Prompt:         image.BuildMarketingPrompt(prompt),
+		Quantity:       j.Quantity,
+		AspectRatio:    j.Aspect,
+		Provider:       provider,
+		RequestID:      j.ID,
+		Locale:         prompt.Extras.Locale,
+		WatermarkTag:   prompt.Watermark.Text,
+		Quality:        prompt.Extras.Quality,
+		NegativePrompt: image.DefaultNegativePrompt,
 	})
 	if err != nil {
 		return fmt.Errorf("image generation: %w", err)

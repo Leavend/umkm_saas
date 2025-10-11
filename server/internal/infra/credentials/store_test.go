@@ -137,3 +137,35 @@ func TestSetOpenAIAPIKeyEmpty(t *testing.T) {
 		t.Fatal("expected error for empty key")
 	}
 }
+
+func TestQwenAPIKey(t *testing.T) {
+	store := NewStore(&stubExecutor{token: " sk-qwen "})
+	key, err := store.QwenAPIKey(context.Background())
+	if err != nil {
+		t.Fatalf("QwenAPIKey error: %v", err)
+	}
+	if key != "sk-qwen" {
+		t.Fatalf("expected sk-qwen, got %q", key)
+	}
+}
+
+func TestSetQwenAPIKey(t *testing.T) {
+	exec := &stubExecutor{}
+	store := NewStore(exec)
+	if err := store.SetQwenAPIKey(context.Background(), "secret"); err != nil {
+		t.Fatalf("SetQwenAPIKey error: %v", err)
+	}
+	if len(exec.exec.args) != 3 {
+		t.Fatalf("expected 3 args, got %d", len(exec.exec.args))
+	}
+	if v, ok := exec.exec.args[1].(string); !ok || v != "secret" {
+		t.Fatalf("expected secret argument, got %T %v", exec.exec.args[1], exec.exec.args[1])
+	}
+}
+
+func TestSetQwenAPIKeyEmpty(t *testing.T) {
+	store := NewStore(&stubExecutor{})
+	if err := store.SetQwenAPIKey(context.Background(), " "); err == nil {
+		t.Fatal("expected error for empty key")
+	}
+}
