@@ -5,13 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"server/internal/domain/jsoncfg"
 	"server/internal/infra"
+	"server/internal/infra/credentials"
+	"server/internal/providers/genai"
 	"server/internal/providers/image"
 	videoprovider "server/internal/providers/video"
 	"server/internal/sqlinline"
@@ -24,8 +28,8 @@ const (
 	statusSucceeded = "SUCCEEDED"
 	statusFailed    = "FAILED"
 
-	defaultImageProvider = "gemini"
-	defaultVideoProvider = "veo2"
+	defaultImageProvider = "gemini-2.5-flash"
+	defaultVideoProvider = "gemini-2.5-flash"
 
 	jobPollInterval = 2 * time.Second
 )
@@ -66,12 +70,41 @@ func main() {
 	}
 	defer pool.Close()
 
+	runner := infra.NewSQLRunner(pool, logger)
+
+	geminiAPIKey := strings.TrimSpace(cfg.GeminiAPIKey)
+	if geminiAPIKey == "" {
+		credStore := credentials.NewStore(runner)
+		keyFromStore, err := credStore.GeminiAPIKey(ctx)
+		if err != nil {
+			logger.Warn().Err(err).Msg("worker: failed to load gemini api key from store")
+		} else {
+			geminiAPIKey = keyFromStore
+		}
+	}
+
+	httpClient := &http.Client{Timeout: 60 * time.Second}
+	geminiClient, err := genai.NewClient(genai.Options{
+		APIKey:     geminiAPIKey,
+		BaseURL:    cfg.GeminiBaseURL,
+		Model:      cfg.GeminiModel,
+		HTTPClient: httpClient,
+		Logger:     &logger,
+	})
+	if err != nil {
+		logger.Fatal().Err(err).Msg("worker: failed to configure gemini client")
+	}
+
+	if geminiAPIKey == "" {
+		logger.Warn().Str("model", geminiClient.Model()).Msg("worker: gemini api key missing, using synthetic asset generation")
+	}
+
 	worker := &jobWorker{
 		ctx:            ctx,
-		runner:         infra.NewSQLRunner(pool, logger),
+		runner:         runner,
 		logger:         logger,
-		imageProviders: initImageProviders(),
-		videoProviders: initVideoProviders(),
+		imageProviders: initImageProviders(geminiClient),
+		videoProviders: initVideoProviders(geminiClient),
 	}
 
 	if err := worker.Run(); err != nil && !errors.Is(err, context.Canceled) {
@@ -80,17 +113,23 @@ func main() {
 	logger.Info().Msg("worker: stopped")
 }
 
-func initImageProviders() map[string]image.Generator {
+func initImageProviders(client *genai.Client) map[string]image.Generator {
+	gemini := image.NewGeminiGenerator(client)
 	return map[string]image.Generator{
-		"gemini":     image.NewNanoBanana(),
-		"nanobanana": image.NewNanoBanana(),
+		"gemini":           gemini,
+		"gemini-1.5-flash": gemini,
+		"gemini-2.0-flash": gemini,
+		"gemini-2.5-flash": gemini,
 	}
 }
 
-func initVideoProviders() map[string]videoprovider.Generator {
+func initVideoProviders(client *genai.Client) map[string]videoprovider.Generator {
+	gemini := videoprovider.NewGeminiGenerator(client)
 	return map[string]videoprovider.Generator{
-		"veo2": videoprovider.NewVEO(),
-		"veo3": videoprovider.NewVEO(),
+		"gemini":           gemini,
+		"gemini-1.5-flash": gemini,
+		"gemini-2.0-flash": gemini,
+		"gemini-2.5-flash": gemini,
 	}
 }
 

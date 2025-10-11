@@ -36,6 +36,11 @@ make worker # starts background worker processing generation jobs
 > services. When developing offline, make sure the dependencies are cached or
 > vendored locally prior to running the commands above.
 
+The worker and HTTP layer both delegate image & video generation to the
+Gemini **2.5 Flash** provider. When no `GEMINI_API_KEY` is configured the
+provider emits deterministic synthetic assets so the end-to-end pipeline remains
+testable without external calls.
+
 ## Verification
 ```bash
 make verify
@@ -89,7 +94,7 @@ curl -i -X POST -H "Authorization: Bearer <JWT>" http://localhost:8080/v1/images
 # Generate videos (async via worker)
 curl -i -X POST -H "Authorization: Bearer <JWT>" http://localhost:8080/v1/videos/generate \
   -H 'Content-Type: application/json' \
-  -d '{"provider":"veo2","prompt":"Hero shot ramen"}'
+  -d '{"provider":"gemini-2.5-flash","prompt":"Hero shot ramen"}'
 
 # Ideas
 curl -i -X POST -H "Authorization: Bearer <JWT>" http://localhost:8080/v1/ideas/from-image \
