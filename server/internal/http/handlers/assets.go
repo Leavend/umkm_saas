@@ -65,8 +65,10 @@ func (a *App) DownloadAsset(w http.ResponseWriter, r *http.Request) {
 	row := a.SQL.QueryRow(r.Context(), sqlinline.QSelectAssetByID, assetID)
 	var id, ownerID, storageKey, mime string
 	var bytes int64
+	var width, height int
+	var aspect string
 	var props []byte
-	if err := row.Scan(&id, &ownerID, &storageKey, &mime, &bytes, &props); err != nil {
+	if err := row.Scan(&id, &ownerID, &storageKey, &mime, &bytes, &width, &height, &aspect, &props); err != nil {
 		a.error(w, http.StatusNotFound, "not_found", "asset not found")
 		return
 	}
@@ -74,5 +76,11 @@ func (a *App) DownloadAsset(w http.ResponseWriter, r *http.Request) {
 		a.error(w, http.StatusForbidden, "forbidden", "not your asset")
 		return
 	}
-	a.json(w, http.StatusOK, map[string]any{"url": a.assetURL(storageKey), "mime": mime})
+	a.json(w, http.StatusOK, map[string]any{
+		"url":          a.assetURL(storageKey),
+		"mime":         mime,
+		"width":        width,
+		"height":       height,
+		"aspect_ratio": aspect,
+	})
 }

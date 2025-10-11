@@ -75,3 +75,23 @@ func sanitizeKey(key string) (string, error) {
 	}
 	return cleaned, nil
 }
+
+// Read fetches the bytes stored at the given key.
+func (s *FileStore) Read(ctx context.Context, key string) ([]byte, error) {
+	if s == nil {
+		return nil, errors.New("storage: no store configured")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cleanKey, err := sanitizeKey(key)
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(s.basePath, filepath.FromSlash(cleanKey))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("storage: read file: %w", err)
+	}
+	return data, nil
+}

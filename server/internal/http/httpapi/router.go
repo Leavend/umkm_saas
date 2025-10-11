@@ -45,6 +45,7 @@ func NewRouter(app *handlers.App) http.Handler {
 		})
 
 		r.With(middleware.AuthJWT(app.JWTSecret)).Route("/images", func(r chi.Router) {
+			r.Post("/uploads", app.ImagesUpload)
 			r.Post("/generate", app.ImagesGenerate)
 			r.Post("/enhance", app.ImagesEnhance)
 			r.Get("/{job_id}/status", app.ImageStatus)

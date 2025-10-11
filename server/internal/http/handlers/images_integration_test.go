@@ -23,6 +23,7 @@ import (
 	"server/internal/providers/qwen"
 	videoprovider "server/internal/providers/video"
 	"server/internal/sqlinline"
+	"server/internal/storage"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -55,6 +56,11 @@ func TestImagesGenerateIntegration(t *testing.T) {
 	}
 	qwenGenerator := image.NewQwenGenerator(qwenClient, geminiGenerator)
 
+	store, err := storage.NewFileStore(cfg.StoragePath)
+	if err != nil {
+		t.Fatalf("new file store: %v", err)
+	}
+
 	app := &handlers.App{
 		Config:    cfg,
 		Logger:    logger,
@@ -67,6 +73,7 @@ func TestImagesGenerateIntegration(t *testing.T) {
 			"gemini":          geminiGenerator,
 		},
 		VideoProviders: map[string]videoprovider.Generator{},
+		FileStore:      store,
 	}
 
 	router := httpapi.NewRouter(app)
@@ -228,6 +235,11 @@ func TestImageJobAccessControl(t *testing.T) {
 	}
 	qwenGenerator := image.NewQwenGenerator(qwenClient, geminiGenerator)
 
+	store, err := storage.NewFileStore(cfg.StoragePath)
+	if err != nil {
+		t.Fatalf("new file store: %v", err)
+	}
+
 	app := &handlers.App{
 		Config:    cfg,
 		Logger:    logger,
@@ -240,6 +252,7 @@ func TestImageJobAccessControl(t *testing.T) {
 			"gemini":          geminiGenerator,
 		},
 		VideoProviders: map[string]videoprovider.Generator{},
+		FileStore:      store,
 	}
 	router := httpapi.NewRouter(app)
 

@@ -17,6 +17,7 @@ import (
 	"server/internal/providers/prompt"
 	"server/internal/providers/qwen"
 	"server/internal/providers/video"
+	"server/internal/storage"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
@@ -33,6 +34,7 @@ type App struct {
 	ImageProviders map[string]image.Generator
 	VideoProviders map[string]video.Generator
 	JWTSecret      string
+	FileStore      *storage.FileStore
 }
 
 func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
@@ -194,6 +196,11 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 	geminiVideo := video.NewGeminiGenerator(geminiClient)
 	qwenImage := image.NewQwenGenerator(qwenClient, geminiImage)
 
+	fileStore, err := storage.NewFileStore(cfg.StoragePath)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("failed to configure storage root")
+	}
+
 	imageProviders := map[string]image.Generator{
 		"qwen":                              qwenImage,
 		"qwen-image":                        qwenImage,
@@ -221,6 +228,7 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 			"gemini-2.5-flash": geminiVideo,
 		},
 		JWTSecret: cfg.JWTSecret,
+		FileStore: fileStore,
 	}
 }
 

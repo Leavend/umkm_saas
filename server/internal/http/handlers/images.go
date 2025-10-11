@@ -1,9 +1,17 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,6 +26,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const maxUploadBytes = 12 << 20
+
 type imageGenerateRequest struct {
 	Provider    string             `json:"provider"`
 	Quantity    int                `json:"quantity"`
@@ -29,6 +39,259 @@ type jobResponse struct {
 	JobID          string `json:"job_id"`
 	Status         string `json:"status"`
 	RemainingQuota int    `json:"remaining_quota"`
+}
+
+func (a *App) ImagesUpload(w http.ResponseWriter, r *http.Request) {
+	userID := a.currentUserID(r)
+	if userID == "" {
+		a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
+		return
+	}
+	if a.FileStore == nil {
+		a.error(w, http.StatusInternalServerError, "internal", "file storage unavailable")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes+1024)
+	if err := r.ParseMultipartForm(maxUploadBytes + 1024); err != nil {
+		a.error(w, http.StatusBadRequest, "bad_request", "invalid upload payload")
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		a.error(w, http.StatusBadRequest, "bad_request", "file is required")
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(io.LimitReader(file, maxUploadBytes+1))
+	if err != nil {
+		a.error(w, http.StatusBadRequest, "bad_request", "failed to read file")
+		return
+	}
+	if len(data) == 0 {
+		a.error(w, http.StatusBadRequest, "bad_request", "empty file")
+		return
+	}
+	if len(data) > maxUploadBytes {
+		a.error(w, http.StatusRequestEntityTooLarge, "too_large", "file exceeds 12MB limit")
+		return
+	}
+
+	sniff := data
+	if len(sniff) > 512 {
+		sniff = sniff[:512]
+	}
+	detectedMIME := http.DetectContentType(sniff)
+	width, height, normalizedMIME, err := decodeImageDimensions(data, detectedMIME)
+	if err != nil {
+		a.error(w, http.StatusBadRequest, "bad_request", "unsupported image format")
+		return
+	}
+	if normalizedMIME != "" {
+		detectedMIME = normalizedMIME
+	}
+	if !isSupportedImageMime(detectedMIME) {
+		a.error(w, http.StatusBadRequest, "bad_request", "format not supported")
+		return
+	}
+	aspect := deriveAspectLabel(width, height)
+	ext := extensionForUpload(detectedMIME)
+	if ext == "" {
+		ext = ".png"
+	}
+	storageKey := fmt.Sprintf("uploads/%s/%d%s", userID, time.Now().UnixNano(), ext)
+	savedKey, err := a.FileStore.Write(r.Context(), storageKey, data)
+	if err != nil {
+		a.error(w, http.StatusInternalServerError, "internal", "failed to persist file")
+		return
+	}
+
+	props := map[string]any{
+		"source":            "upload",
+		"original_filename": header.Filename,
+		"filename":          filepath.Base(savedKey),
+		"url":               a.assetURL(savedKey),
+	}
+	if mode := strings.TrimSpace(r.FormValue("mode")); mode != "" {
+		props["mode"] = mode
+	}
+	if theme := strings.TrimSpace(r.FormValue("background_theme")); theme != "" {
+		props["background_theme"] = theme
+	}
+	if enhance := strings.TrimSpace(r.FormValue("enhance_level")); enhance != "" {
+		props["enhance_level"] = enhance
+	}
+
+	row := a.SQL.QueryRow(
+		r.Context(),
+		sqlinline.QInsertUploadedAsset,
+		userID,
+		"",
+		savedKey,
+		detectedMIME,
+		int64(len(data)),
+		width,
+		height,
+		aspect,
+		jsoncfg.MustMarshal(props),
+	)
+	var assetID string
+	if err := row.Scan(&assetID); err != nil {
+		a.error(w, http.StatusInternalServerError, "internal", "failed to record upload")
+		return
+	}
+
+	a.json(w, http.StatusCreated, map[string]any{
+		"asset_id":     assetID,
+		"storage_key":  savedKey,
+		"mime":         detectedMIME,
+		"bytes":        len(data),
+		"width":        width,
+		"height":       height,
+		"aspect_ratio": aspect,
+		"url":          a.assetURL(savedKey),
+	})
+}
+
+func decodeImageDimensions(data []byte, fallback string) (int, int, string, error) {
+	reader := bytes.NewReader(data)
+	cfg, format, err := image.DecodeConfig(reader)
+	if err == nil {
+		return cfg.Width, cfg.Height, mimeFromFormat(format, fallback), nil
+	}
+	if isLikelyWebP(data) || strings.Contains(strings.ToLower(fallback), "webp") {
+		if width, height, webpErr := decodeWebPDimensions(data); webpErr == nil {
+			return width, height, "image/webp", nil
+		}
+	}
+	return 0, 0, fallback, err
+}
+
+func decodeWebPDimensions(data []byte) (int, int, error) {
+	if len(data) < 30 {
+		return 0, 0, fmt.Errorf("webp: insufficient data")
+	}
+	if string(data[0:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
+		return 0, 0, fmt.Errorf("webp: invalid riff header")
+	}
+	chunk := string(data[12:16])
+	switch chunk {
+	case "VP8X":
+		if len(data) < 30 {
+			return 0, 0, fmt.Errorf("webp: truncated vp8x chunk")
+		}
+		width := int(uint32(data[24]) | uint32(data[25])<<8 | uint32(data[26])<<16)
+		height := int(uint32(data[27]) | uint32(data[28])<<8 | uint32(data[29])<<16)
+		return width + 1, height + 1, nil
+	case "VP8 ":
+		if len(data) < 30 {
+			return 0, 0, fmt.Errorf("webp: truncated vp8 chunk")
+		}
+		rawW := binary.LittleEndian.Uint16(data[26:28])
+		rawH := binary.LittleEndian.Uint16(data[28:30])
+		return int(rawW & 0x3FFF), int(rawH & 0x3FFF), nil
+	case "VP8L":
+		if len(data) < 25 {
+			return 0, 0, fmt.Errorf("webp: truncated vp8l chunk")
+		}
+		if data[20] != 0x2f {
+			return 0, 0, fmt.Errorf("webp: invalid vp8l signature")
+		}
+		bits := binary.LittleEndian.Uint32(data[21:25])
+		width := int(bits&0x3FFF) + 1
+		height := int((bits>>14)&0x3FFF) + 1
+		return width, height, nil
+	default:
+		return 0, 0, fmt.Errorf("webp: unsupported chunk %s", chunk)
+	}
+}
+
+func isLikelyWebP(data []byte) bool {
+	return len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP"
+}
+
+func mimeFromFormat(format, fallback string) string {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "png":
+		return "image/png"
+	case "jpeg", "jpg":
+		return "image/jpeg"
+	case "gif":
+		return "image/gif"
+	default:
+		return fallback
+	}
+}
+
+func isSupportedImageMime(mime string) bool {
+	mime = strings.ToLower(strings.TrimSpace(mime))
+	switch mime {
+	case "image/png", "image/jpeg", "image/jpg", "image/webp":
+		return true
+	default:
+		return false
+	}
+}
+
+func extensionForUpload(mime string) string {
+	switch strings.ToLower(strings.TrimSpace(mime)) {
+	case "image/png":
+		return ".png"
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/webp":
+		return ".webp"
+	default:
+		return ""
+	}
+}
+
+func deriveAspectLabel(width, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+	ratio := float64(width) / float64(height)
+	targets := map[string]float64{
+		"1:1":  1.0,
+		"4:3":  4.0 / 3.0,
+		"3:4":  3.0 / 4.0,
+		"16:9": 16.0 / 9.0,
+		"9:16": 9.0 / 16.0,
+	}
+	best := ""
+	bestDiff := math.MaxFloat64
+	for label, target := range targets {
+		diff := math.Abs(ratio - target)
+		if diff < bestDiff {
+			bestDiff = diff
+			best = label
+		}
+	}
+	if best != "" && bestDiff <= 0.12 {
+		return best
+	}
+	g := gcd(width, height)
+	if g <= 0 {
+		return fmt.Sprintf("%d:%d", width, height)
+	}
+	return fmt.Sprintf("%d:%d", width/g, height/g)
+}
+
+func gcd(a, b int) int {
+	if a < 0 {
+		a = -a
+	}
+	if b < 0 {
+		b = -b
+	}
+	for b != 0 {
+		a, b = b, a%b
+	}
+	if a == 0 {
+		return 1
+	}
+	return a
 }
 
 func (a *App) ImagesGenerate(w http.ResponseWriter, r *http.Request) {
