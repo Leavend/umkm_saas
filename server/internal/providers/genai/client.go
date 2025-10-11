@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
@@ -80,6 +82,53 @@ type VideoAsset struct {
 	Data       []byte
 }
 
+type geminiContent struct {
+	Role  string       `json:"role,omitempty"`
+	Parts []geminiPart `json:"parts,omitempty"`
+}
+
+type geminiPart struct {
+	Text       string            `json:"text,omitempty"`
+	InlineData *geminiInlineData `json:"inlineData,omitempty"`
+	FileData   *geminiFileData   `json:"fileData,omitempty"`
+}
+
+type geminiInlineData struct {
+	MimeType string `json:"mimeType,omitempty"`
+	Data     string `json:"data,omitempty"`
+}
+
+type geminiFileData struct {
+	MimeType string `json:"mimeType,omitempty"`
+	FileURI  string `json:"fileUri,omitempty"`
+}
+
+type geminiGenerationConfig struct {
+	CandidateCount   int    `json:"candidateCount,omitempty"`
+	ResponseMimeType string `json:"responseMimeType,omitempty"`
+}
+
+type geminiGenerateContentRequest struct {
+	Contents         []geminiContent         `json:"contents"`
+	GenerationConfig *geminiGenerationConfig `json:"generationConfig,omitempty"`
+}
+
+type geminiCandidate struct {
+	Content      geminiContent `json:"content"`
+	FinishReason string        `json:"finishReason,omitempty"`
+}
+
+type geminiGenerateContentResponse struct {
+	Candidates []geminiCandidate `json:"candidates"`
+}
+
+type geminiErrorResponse struct {
+	Error struct {
+		Code    int    `json:"code,omitempty"`
+		Message string `json:"message,omitempty"`
+	} `json:"error"`
+}
+
 // NewClient constructs a Gemini client with sane defaults. Callers may provide
 // a nil HTTP client; a reusable one with sensible timeouts will be created.
 func NewClient(opts Options) (*Client, error) {
@@ -130,6 +179,49 @@ func (c *Client) GenerateImages(ctx context.Context, req ImageRequest) ([]ImageA
 		return nil, err
 	}
 
+	if c.apiKey == "" {
+		return c.syntheticImages(req)
+	}
+
+	assets, err := c.remoteGenerateImages(ctx, req)
+	if err != nil {
+		c.logger.Warn().
+			Err(err).
+			Str("model", c.model).
+			Msg("genai: remote image generation failed; falling back to synthetic assets")
+		return c.syntheticImages(req)
+	}
+	if len(assets) == 0 {
+		return c.syntheticImages(req)
+	}
+	return assets, nil
+}
+
+// GenerateVideo synthesizes a deterministic video asset placeholder.
+func (c *Client) GenerateVideo(ctx context.Context, req VideoRequest) (*VideoAsset, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	if c.apiKey == "" {
+		return c.syntheticVideo(req), nil
+	}
+
+	asset, err := c.remoteGenerateVideo(ctx, req)
+	if err != nil {
+		c.logger.Warn().
+			Err(err).
+			Str("model", c.model).
+			Msg("genai: remote video generation failed; falling back to synthetic asset")
+		return c.syntheticVideo(req), nil
+	}
+	if asset == nil || len(asset.Data) == 0 {
+		return c.syntheticVideo(req), nil
+	}
+	return asset, nil
+}
+
+func (c *Client) syntheticImages(req ImageRequest) ([]ImageAsset, error) {
 	quantity := req.Quantity
 	if quantity <= 0 {
 		quantity = 1
@@ -160,12 +252,7 @@ func (c *Client) GenerateImages(ctx context.Context, req ImageRequest) ([]ImageA
 	return assets, nil
 }
 
-// GenerateVideo synthesizes a deterministic video asset placeholder.
-func (c *Client) GenerateVideo(ctx context.Context, req VideoRequest) (*VideoAsset, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
+func (c *Client) syntheticVideo(req VideoRequest) *VideoAsset {
 	seed := deterministicSeed(req.RequestID, req.Prompt, req.Locale, c.model, 0)
 	storageKey := syntheticStorageKey("video", c.model, seed, 1, "mp4")
 	asset := &VideoAsset{
@@ -181,7 +268,298 @@ func (c *Client) GenerateVideo(ctx context.Context, req VideoRequest) (*VideoAss
 		Str("model", c.model).
 		Msg("genai: generated synthetic video asset")
 
-	return asset, nil
+	return asset
+}
+
+func (c *Client) remoteGenerateImages(ctx context.Context, req ImageRequest) ([]ImageAsset, error) {
+	quantity := clampQuantity(req.Quantity)
+	payload := geminiGenerateContentRequest{
+		Contents: []geminiContent{
+			{
+				Role: "user",
+				Parts: []geminiPart{{
+					Text: buildImagePrompt(req),
+				}},
+			},
+		},
+		GenerationConfig: &geminiGenerationConfig{
+			CandidateCount:   quantity,
+			ResponseMimeType: "image/png",
+		},
+	}
+
+	var response geminiGenerateContentResponse
+	if err := c.invokeGemini(ctx, fmt.Sprintf("/models/%s:generateContent", url.PathEscape(c.model)), payload, &response); err != nil {
+		return nil, err
+	}
+
+	width, height := normalizeAspect(req.AspectRatio)
+	var assets []ImageAsset
+	for _, candidate := range response.Candidates {
+		for _, part := range candidate.Content.Parts {
+			asset, err := c.decodeInlineAsset(ctx, part)
+			if err != nil || len(asset.Data) == 0 {
+				continue
+			}
+			format := asset.Format
+			if format == "" {
+				format = "image/png"
+			}
+			w, h := decodeImageDimensions(asset.Data)
+			if w == 0 || h == 0 {
+				w, h = width, height
+			}
+			assets = append(assets, ImageAsset{
+				StorageKey: "",
+				URL:        asset.URL,
+				Format:     format,
+				Width:      w,
+				Height:     h,
+				Data:       asset.Data,
+			})
+			if len(assets) >= quantity {
+				break
+			}
+		}
+		if len(assets) >= quantity {
+			break
+		}
+	}
+
+	c.logger.Debug().
+		Str("request_id", req.RequestID).
+		Str("model", c.model).
+		Int("quantity", len(assets)).
+		Msg("genai: generated remote image assets")
+
+	return assets, nil
+}
+
+func (c *Client) remoteGenerateVideo(ctx context.Context, req VideoRequest) (*VideoAsset, error) {
+	payload := geminiGenerateContentRequest{
+		Contents: []geminiContent{
+			{
+				Role: "user",
+				Parts: []geminiPart{{
+					Text: buildVideoPrompt(req),
+				}},
+			},
+		},
+		GenerationConfig: &geminiGenerationConfig{ResponseMimeType: "video/mp4"},
+	}
+
+	var response geminiGenerateContentResponse
+	if err := c.invokeGemini(ctx, fmt.Sprintf("/models/%s:generateContent", url.PathEscape(c.model)), payload, &response); err != nil {
+		return nil, err
+	}
+
+	for _, candidate := range response.Candidates {
+		for _, part := range candidate.Content.Parts {
+			asset, err := c.decodeInlineAsset(ctx, part)
+			if err != nil || len(asset.Data) == 0 {
+				continue
+			}
+			length := estimateVideoLength(req.Prompt)
+			if asset.Length > 0 {
+				length = asset.Length
+			}
+			result := &VideoAsset{
+				StorageKey: "",
+				URL:        asset.URL,
+				Format:     asset.Format,
+				Length:     length,
+				Data:       asset.Data,
+			}
+			c.logger.Debug().
+				Str("request_id", req.RequestID).
+				Str("model", c.model).
+				Msg("genai: generated remote video asset")
+
+			return result, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no video content returned")
+}
+
+type inlineAsset struct {
+	Data   []byte
+	Format string
+	URL    string
+	Length int
+}
+
+func (c *Client) invokeGemini(ctx context.Context, path string, payload any, out any) error {
+	endpoint := strings.TrimRight(c.baseURL, "/") + path
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	q := req.URL.Query()
+	if c.apiKey != "" {
+		q.Set("key", c.apiKey)
+	}
+	req.URL.RawQuery = q.Encode()
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("invoke gemini: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= http.StatusBadRequest {
+		var apiErr geminiErrorResponse
+		if err := json.NewDecoder(resp.Body).Decode(&apiErr); err == nil && apiErr.Error.Message != "" {
+			return fmt.Errorf("gemini status %d: %s", resp.StatusCode, apiErr.Error.Message)
+		}
+		data, _ := io.ReadAll(resp.Body)
+		if len(data) > 0 {
+			return fmt.Errorf("gemini status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		}
+		return fmt.Errorf("gemini status %d", resp.StatusCode)
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("decode gemini response: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) decodeInlineAsset(ctx context.Context, part geminiPart) (inlineAsset, error) {
+	if part.InlineData != nil && part.InlineData.Data != "" {
+		data, err := base64.StdEncoding.DecodeString(part.InlineData.Data)
+		if err != nil {
+			return inlineAsset{}, fmt.Errorf("decode inline data: %w", err)
+		}
+		return inlineAsset{Data: data, Format: part.InlineData.MimeType}, nil
+	}
+
+	if part.FileData != nil && part.FileData.FileURI != "" {
+		data, mime, err := c.downloadFile(ctx, part.FileData.FileURI)
+		if err != nil {
+			return inlineAsset{}, err
+		}
+		return inlineAsset{Data: data, Format: firstNonEmpty(part.FileData.MimeType, mime), URL: part.FileData.FileURI}, nil
+	}
+
+	return inlineAsset{}, nil
+}
+
+func (c *Client) downloadFile(ctx context.Context, uri string) ([]byte, string, error) {
+	target := uri
+	if !strings.HasPrefix(uri, "http://") && !strings.HasPrefix(uri, "https://") {
+		target = strings.TrimRight(c.baseURL, "/") + "/" + strings.TrimLeft(uri, "/")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("create download request: %w", err)
+	}
+	if c.apiKey != "" {
+		q := req.URL.Query()
+		q.Set("key", c.apiKey)
+		req.URL.RawQuery = q.Encode()
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("download file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= http.StatusBadRequest {
+		data, _ := io.ReadAll(resp.Body)
+		return nil, "", fmt.Errorf("download file status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+
+	blob, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("read file: %w", err)
+	}
+	return blob, resp.Header.Get("Content-Type"), nil
+}
+
+func buildImagePrompt(req ImageRequest) string {
+	var b strings.Builder
+	prompt := strings.TrimSpace(req.Prompt)
+	if prompt != "" {
+		b.WriteString(prompt)
+	}
+	if aspect := strings.TrimSpace(req.AspectRatio); aspect != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("Aspect ratio: ")
+		b.WriteString(aspect)
+	}
+	if watermark := strings.TrimSpace(req.WatermarkTag); watermark != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("Watermark tag: ")
+		b.WriteString(watermark)
+	}
+	if locale := strings.TrimSpace(req.Locale); locale != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("Locale: ")
+		b.WriteString(locale)
+	}
+	if b.Len() == 0 {
+		b.WriteString("Create a marketing image")
+	}
+	return b.String()
+}
+
+func buildVideoPrompt(req VideoRequest) string {
+	var b strings.Builder
+	prompt := strings.TrimSpace(req.Prompt)
+	if prompt != "" {
+		b.WriteString(prompt)
+	}
+	if locale := strings.TrimSpace(req.Locale); locale != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("Locale: ")
+		b.WriteString(locale)
+	}
+	if b.Len() == 0 {
+		b.WriteString("Create a short promotional video")
+	}
+	return b.String()
+}
+
+func clampQuantity(quantity int) int {
+	if quantity <= 0 {
+		return 1
+	}
+	if quantity > 4 {
+		return 4
+	}
+	return quantity
+}
+
+func decodeImageDimensions(data []byte) (int, int) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return 0, 0
+	}
+	return cfg.Width, cfg.Height
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func (c *Client) assetURL(storageKey string) string {
