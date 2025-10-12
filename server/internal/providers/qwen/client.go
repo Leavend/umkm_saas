@@ -112,12 +112,13 @@ type generationContent struct {
 }
 
 type generationImage struct {
-	Format string `json:"format,omitempty"`
-	Data   string `json:"image_bytes,omitempty"`
-	URL    string `json:"url,omitempty"`
-	Width  int    `json:"width,omitempty"`
-	Height int    `json:"height,omitempty"`
-	Name   string `json:"name,omitempty"`
+	Format   string `json:"format,omitempty"`
+	MIMEType string `json:"mime_type,omitempty"`
+	Data     string `json:"image_bytes,omitempty"`
+	URL      string `json:"image_url,omitempty"`
+	Width    int    `json:"width,omitempty"`
+	Height   int    `json:"height,omitempty"`
+	Name     string `json:"name,omitempty"`
 }
 
 type generationParams struct {
@@ -226,11 +227,12 @@ func (c *Client) GenerateImage(ctx context.Context, req ImageRequest) (*ImageAss
 	if prompt == "" {
 		return nil, errors.New("qwen: prompt is required")
 	}
+	imageContent := encodeImageContent(req.SourceImage)
 	contents := make([]generationContent, 0, 2)
-	if img := encodeImageContent(req.SourceImage); img != nil {
-		contents = append(contents, generationContent{Image: img})
-	}
 	contents = append(contents, generationContent{Text: prompt})
+	if imageContent != nil {
+		contents = append(contents, generationContent{Image: imageContent})
+	}
 	payload := generationRequest{
 		Model: c.model,
 		Input: generationInput{
@@ -252,9 +254,12 @@ func (c *Client) GenerateImage(ctx context.Context, req ImageRequest) (*ImageAss
 	if quality := strings.TrimSpace(req.Quality); quality != "" {
 		payload.Parameters.Quality = quality
 	}
-	payload.Parameters.Style = "product-photography"
-	if extend := c.promptExtend; extend {
-		payload.Parameters.PromptExtend = &extend
+	editing := imageContent != nil
+	if !editing {
+		payload.Parameters.Style = "product-photography"
+		if extend := c.promptExtend; extend {
+			payload.Parameters.PromptExtend = &extend
+		}
 	}
 	if req.Seed > 0 {
 		payload.Parameters.Seed = &req.Seed
@@ -264,7 +269,7 @@ func (c *Client) GenerateImage(ctx context.Context, req ImageRequest) (*ImageAss
 	if loc := strings.TrimSpace(req.Locale); loc != "" {
 		payload.Parameters.Locale = loc
 	}
-	if wf := buildWorkflowParams(req.Workflow); wf != nil {
+	if wf := buildWorkflowParams(req.Workflow, editing); wf != nil {
 		payload.Parameters.Workflow = wf
 	}
 
@@ -372,34 +377,120 @@ func encodeImageContent(src *SourceImage) *generationImage {
 	if src == nil {
 		return nil
 	}
-	if len(src.Data) == 0 && strings.TrimSpace(src.URL) == "" {
+	dataAvailable := len(src.Data) > 0
+	url := strings.TrimSpace(src.URL)
+	if !dataAvailable && url == "" {
 		return nil
 	}
 	payload := &generationImage{}
-	if strings.TrimSpace(src.MIME) != "" {
-		payload.Format = strings.TrimPrefix(strings.ToLower(src.MIME), "image/")
+	if mime := strings.TrimSpace(src.MIME); mime != "" {
+		payload.MIMEType = mime
 	}
-	if len(src.Data) > 0 {
-		payload.Data = base64.StdEncoding.EncodeToString(src.Data)
-		payload.Width = src.Width
-		payload.Height = src.Height
-	}
-	if payload.Format == "" && strings.TrimSpace(src.Filename) != "" {
-		if idx := strings.LastIndex(src.Filename, "."); idx > -1 && idx < len(src.Filename)-1 {
-			payload.Format = strings.TrimPrefix(strings.ToLower(src.Filename[idx+1:]), ".")
+	if format := inferSourceFormat(src); format != "" {
+		payload.Format = format
+		if payload.MIMEType == "" {
+			switch format {
+			case "jpg":
+				payload.MIMEType = "image/jpeg"
+			default:
+				payload.MIMEType = "image/" + format
+			}
 		}
 	}
-	if strings.TrimSpace(src.URL) != "" {
-		payload.URL = strings.TrimSpace(src.URL)
+	if dataAvailable {
+		payload.Data = base64.StdEncoding.EncodeToString(src.Data)
+		if src.Width > 0 {
+			payload.Width = src.Width
+		}
+		if src.Height > 0 {
+			payload.Height = src.Height
+		}
+	} else {
+		payload.URL = url
 	}
-	if strings.TrimSpace(src.Filename) != "" {
-		payload.Name = strings.TrimSpace(src.Filename)
+	name := strings.TrimSpace(src.Filename)
+	if name == "" {
+		name = strings.TrimSpace(src.AssetID)
+	}
+	if name != "" {
+		payload.Name = name
 	}
 	return payload
 }
 
-func buildWorkflowParams(cfg Workflow) *workflowParams {
+func inferSourceFormat(src *SourceImage) string {
+	if src == nil {
+		return ""
+	}
+	if mime := strings.TrimSpace(src.MIME); mime != "" {
+		return normalizeImageFormat(strings.TrimPrefix(strings.ToLower(mime), "image/"))
+	}
+	if ext := extensionFromName(src.Filename); ext != "" {
+		return ext
+	}
+	if ext := extensionFromURL(src.URL); ext != "" {
+		return ext
+	}
+	return ""
+}
+
+func extensionFromURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(raw); err == nil {
+		if ext := extensionFromName(parsed.Path); ext != "" {
+			return ext
+		}
+	}
+	return extensionFromName(raw)
+}
+
+func extensionFromName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	if idx := strings.LastIndex(name, "."); idx > -1 && idx < len(name)-1 {
+		ext := name[idx+1:]
+		if hashIdx := strings.Index(ext, "#"); hashIdx > -1 {
+			ext = ext[:hashIdx]
+		}
+		if queryIdx := strings.Index(ext, "?"); queryIdx > -1 {
+			ext = ext[:queryIdx]
+		}
+		return normalizeImageFormat(ext)
+	}
+	return ""
+}
+
+func normalizeImageFormat(ext string) string {
+	ext = strings.ToLower(strings.TrimSpace(ext))
+	ext = strings.TrimPrefix(ext, ".")
+	switch ext {
+	case "jpeg":
+		return "jpeg"
+	case "jpg":
+		return "jpg"
+	case "png":
+		return "png"
+	case "webp":
+		return "webp"
+	case "bmp":
+		return "bmp"
+	case "gif":
+		return "gif"
+	default:
+		return ext
+	}
+}
+
+func buildWorkflowParams(cfg Workflow, editing bool) *workflowParams {
 	mode := strings.TrimSpace(cfg.Mode)
+	if editing && (mode == "" || mode == "generate") {
+		mode = "enhance"
+	}
 	if mode == "" || mode == "generate" {
 		return nil
 	}
