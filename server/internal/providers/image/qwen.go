@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -13,23 +14,41 @@ import (
 // QwenGenerator orchestrates calls to DashScope's Qwen image model and falls back
 // to another generator (e.g. synthetic Gemini) when credentials are missing or
 // the remote call fails.
+type qwenImageClient interface {
+	GenerateImage(context.Context, qwen.ImageRequest) (*qwen.ImageAsset, error)
+	HasCredentials() bool
+	Model() string
+}
+
+// QwenGenerator orchestrates calls to DashScope's Qwen image model and falls back
+// to another generator (e.g. synthetic Gemini) when credentials are missing or
+// the remote call fails.
 type QwenGenerator struct {
-	client   *qwen.Client
+	client   qwenImageClient
 	fallback Generator
 }
 
 // NewQwenGenerator wires a Qwen client with an optional fallback generator.
-func NewQwenGenerator(client *qwen.Client, fallback Generator) *QwenGenerator {
+func NewQwenGenerator(client qwenImageClient, fallback Generator) *QwenGenerator {
 	return &QwenGenerator{client: client, fallback: fallback}
 }
 
 // Generate fulfils the Generator interface.
 func (g *QwenGenerator) Generate(ctx context.Context, req GenerateRequest) ([]Asset, error) {
-	if g == nil || g.client == nil {
-		if g != nil && g.fallback != nil {
+	if g == nil {
+		return nil, fmt.Errorf("qwen generator not configured")
+	}
+	if g.client == nil {
+		if g.fallback != nil {
 			return g.fallback.Generate(ctx, req)
 		}
 		return nil, fmt.Errorf("qwen generator not configured")
+	}
+	if !g.client.HasCredentials() {
+		if g.fallback != nil {
+			return g.fallback.Generate(ctx, req)
+		}
+		return nil, fmt.Errorf("qwen generator missing credentials")
 	}
 	quantity := req.Quantity
 	if quantity <= 0 {
@@ -63,7 +82,7 @@ func (g *QwenGenerator) Generate(ctx context.Context, req GenerateRequest) ([]As
 			SourceImage: qwenSourceFromRequest(req.SourceImage),
 		})
 		if err != nil {
-			if g.fallback != nil {
+			if shouldFallbackToSynthetic(err) && g.fallback != nil {
 				return g.fallback.Generate(ctx, req)
 			}
 			return nil, err
@@ -88,6 +107,17 @@ func (g *QwenGenerator) String() string {
 }
 
 var _ Generator = (*QwenGenerator)(nil)
+
+func shouldFallbackToSynthetic(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, qwen.ErrMissingAPIKey) {
+		return true
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, "unauthorized") || strings.Contains(msg, "forbidden")
+}
 
 func qwenSourceFromRequest(src *SourceImage) *qwen.SourceImage {
 	if src == nil {
