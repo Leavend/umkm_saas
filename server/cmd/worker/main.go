@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -35,6 +37,12 @@ const (
 	defaultVideoProvider = "gemini-2.5-flash"
 
 	jobPollInterval = 2 * time.Second
+
+	sourceAssetDownloadTimeout = 30 * time.Second
+)
+
+const (
+	maxSourceImageBytes int64 = 20 * 1024 * 1024
 )
 
 type job struct {
@@ -54,6 +62,7 @@ type jobWorker struct {
 	imageProviders map[string]image.Generator
 	videoProviders map[string]videoprovider.Generator
 	store          *storage.FileStore
+	httpClient     *http.Client
 }
 
 var errNoJobAvailable = errors.New("no job available")
@@ -153,6 +162,7 @@ func main() {
 		imageProviders: initImageProviders(qwenClient, geminiClient),
 		videoProviders: initVideoProviders(geminiClient),
 		store:          fileStore,
+		httpClient:     httpClient,
 	}
 
 	if err := worker.Run(); err != nil && !errors.Is(err, context.Canceled) {
@@ -515,7 +525,7 @@ func (w *jobWorker) resolveSourceImage(userID string, cfg jsoncfg.SourceAssetCon
 		storageKey = strings.TrimSpace(cfg.StorageKey)
 		mime       = strings.TrimSpace(cfg.Mime)
 		filename   = strings.TrimSpace(cfg.Filename)
-		url        = strings.TrimSpace(cfg.URL)
+		sourceURL  = strings.TrimSpace(cfg.URL)
 		width      int
 		height     int
 	)
@@ -550,13 +560,13 @@ func (w *jobWorker) resolveSourceImage(userID string, cfg jsoncfg.SourceAssetCon
 		if height == 0 {
 			height = storedH
 		}
-		if url == "" {
+		if sourceURL == "" {
 			var meta map[string]any
 			if err := json.Unmarshal(props, &meta); err == nil {
 				if val, ok := meta["source_url"].(string); ok {
-					url = val
+					sourceURL = val
 				} else if val, ok := meta["url"].(string); ok {
-					url = val
+					sourceURL = val
 				}
 			}
 		}
@@ -578,19 +588,81 @@ func (w *jobWorker) resolveSourceImage(userID string, cfg jsoncfg.SourceAssetCon
 	if filename == "" && storageKey != "" {
 		filename = filepath.Base(storageKey)
 	}
-	if url == "" {
-		url = strings.TrimSpace(cfg.URL)
+	if sourceURL == "" {
+		sourceURL = strings.TrimSpace(cfg.URL)
+	}
+	if len(data) == 0 && sourceURL != "" {
+		if fetched, fetchedMIME := w.fetchSourceAsset(sourceURL); len(fetched) > 0 {
+			data = fetched
+			if mime == "" {
+				mime = fetchedMIME
+			}
+		}
+	}
+	if filename == "" && sourceURL != "" {
+		if parsed, err := neturl.Parse(sourceURL); err == nil {
+			if base := filepath.Base(parsed.Path); base != "" && base != "." {
+				filename = base
+			}
+		} else {
+			if base := filepath.Base(sourceURL); base != "" && base != "." {
+				filename = base
+			}
+		}
 	}
 	return &image.SourceImage{
 		AssetID:    strings.TrimSpace(cfg.AssetID),
 		StorageKey: storageKey,
-		URL:        url,
+		URL:        sourceURL,
 		MIME:       mime,
 		Data:       data,
 		Width:      width,
 		Height:     height,
 		Filename:   filename,
 	}, nil
+}
+
+func (w *jobWorker) fetchSourceAsset(sourceURL string) ([]byte, string) {
+	if w.httpClient == nil {
+		return nil, ""
+	}
+	trimmed := strings.TrimSpace(sourceURL)
+	if trimmed == "" {
+		return nil, ""
+	}
+	lower := strings.ToLower(trimmed)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		return nil, ""
+	}
+	downloadCtx, cancel := context.WithTimeout(w.ctx, sourceAssetDownloadTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(downloadCtx, http.MethodGet, trimmed, nil)
+	if err != nil {
+		w.logger.Warn().Err(err).Str("url", trimmed).Msg("worker: build source asset request failed")
+		return nil, ""
+	}
+	resp, err := w.httpClient.Do(req)
+	if err != nil {
+		w.logger.Warn().Err(err).Str("url", trimmed).Msg("worker: download source asset failed")
+		return nil, ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		w.logger.Warn().Int("status", resp.StatusCode).Str("url", trimmed).Msg("worker: source asset responded with non-success status")
+		return nil, ""
+	}
+	limited := io.LimitReader(resp.Body, maxSourceImageBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		w.logger.Warn().Err(err).Str("url", trimmed).Msg("worker: read source asset failed")
+		return nil, ""
+	}
+	if int64(len(data)) > maxSourceImageBytes {
+		w.logger.Warn().Int64("bytes", int64(len(data))).Str("url", trimmed).Msg("worker: source asset exceeds max size, falling back to url")
+		return nil, ""
+	}
+	mime := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	return data, mime
 }
 
 func jsonPropertyString(raw []byte, key string) (string, bool) {
