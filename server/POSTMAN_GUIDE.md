@@ -96,6 +96,7 @@ Endpoint privat memerlukan JWT. Jika belum memiliki Google ID Token valid:
 1. Buat **Environment** `UMKM SaaS` berisi:
    - `base_url` = `http://localhost:8080/v1` (atau sesuaikan dengan `$PORT`).
    - `jwt_token` = token hasil langkah sebelumnya.
+   - `upload_asset_id` = akan diisi dari respons `/images/uploads` jika Anda menguji workflow enhance.
    - `job_id` = kosong; akan diisi setelah enqueue job.
 2. Tambahkan header berikut untuk setiap request privat:
 
@@ -118,8 +119,8 @@ Endpoint privat memerlukan JWT. Jika belum memiliki Google ID Token valid:
 | `{{base_url}}/prompts/enhance` | POST | Ya | Normalisasi prompt, panggil enhancer sesuai konfigurasi, dan catat usage event.【F:server/internal/http/handlers/prompts.go†L27-L87】 |
 | `{{base_url}}/prompts/random` | POST | Ya | Ambil kumpulan prompt acak per locale dan log provider yang dipakai.【F:server/internal/http/handlers/prompts.go†L89-L120】 |
 | `{{base_url}}/prompts/clear` | POST | Ya | Mencatat event pembersihan prompt; respon 204 tanpa body.【F:server/internal/http/handlers/auth.go†L158-L166】 |
-| `{{base_url}}/images/uploads` | POST | Ya (multipart) | Unggah gambar referensi (maks 12 MB, field `file`) dan simpan metadata tambahan seperti mode/theme/enhance level.【F:server/internal/http/handlers/images.go†L44-L154】 |
-| `{{base_url}}/images/generate` | POST | Ya | Enqueue job gambar dengan validasi kuota & provider (default `qwen-image-plus`).【F:server/internal/http/handlers/images.go†L297-L347】 |
+| `{{base_url}}/images/uploads` | POST | Ya (multipart) | Unggah gambar referensi (maks 12 MB, field `file`); backend memvalidasi format, menyimpan file ke `$STORAGE_PATH`, lalu menuliskan entri aset yang dapat direferensikan ulang.【F:server/internal/http/handlers/images.go†L44-L153】 |
+| `{{base_url}}/images/generate` | POST | Ya | Enqueue job gambar dengan validasi kuota & provider (default `qwen-image-plus`); payload dapat memuat `prompt.source_asset` berisi `asset_id` hasil upload agar worker memakai gambar tersebut.【F:server/internal/http/handlers/images.go†L297-L347】【F:server/cmd/worker/main.go†L258-L307】 |
 | `{{base_url}}/images/enhance` | POST | Ya | Alias ke `/images/generate` untuk skenario enhance prompt.<br>Gunakan payload yang sama.【F:server/internal/http/handlers/images.go†L489-L491】 |
 | `{{base_url}}/images/{{job_id}}/status` | GET | Ya | Lihat status job, provider, quantity, dan metadata lain.【F:server/internal/http/handlers/images.go†L349-L369】 |
 | `{{base_url}}/images/{{job_id}}/assets` | GET | Ya | Daftar aset (URL, dimensi, properties) milik job yang sama dan user terkait.【F:server/internal/http/handlers/images.go†L370-L424】 |
@@ -171,6 +172,21 @@ Endpoint privat memerlukan JWT. Jika belum memiliki Google ID Token valid:
     -F "mode=product" -F "background_theme=marble" -F "enhance_level=medium"
   ```
 
+- **Contoh Respons Upload** — simpan `asset_id` dan `url` sebagai variabel Postman (`upload_asset_id`, `upload_asset_url`).
+
+  ```json
+  {
+    "asset_id": "a3f1f4f2-52a5-4d3b-8d2e-6db6a85f8d2b",
+    "storage_key": "uploads/USER_ID/1709898888123456.png",
+    "mime": "image/png",
+    "bytes": 123456,
+    "width": 1024,
+    "height": 1024,
+    "aspect_ratio": "1:1",
+    "url": "http://localhost:8080/static/uploads/USER_ID/1709898888123456.png"
+  }
+  ```
+
 - **Images Generate / Enhance**
 
   ```json
@@ -190,6 +206,10 @@ Endpoint privat memerlukan JWT. Jika belum memiliki Google ID Token valid:
         "position": "bottom-right"
       },
       "references": [],
+      "source_asset": {
+        "asset_id": "{{upload_asset_id}}",
+        "url": "{{upload_asset_url}}"
+      },
       "extras": {
         "locale": "id",
         "quality": "hd"
@@ -197,6 +217,26 @@ Endpoint privat memerlukan JWT. Jika belum memiliki Google ID Token valid:
     }
   }
   ```
+
+## 7. Kenapa Upload & Generate Terpisah?
+
+Langkah uji keempat (`Images Upload` ➝ `Images Generate/Enhance` ➝ pantau status job) memang membutuhkan dua URL karena masing-masing menangani tanggung jawab berbeda:
+
+- `/v1/images/uploads` menerima **multipart form-data** untuk file mentah, melakukan validasi ukuran/format, menulis file ke penyimpanan lokal (`$STORAGE_PATH`), lalu membuat entri aset beserta metadata yang bisa dibaca ulang.【F:server/internal/http/handlers/images.go†L44-L153】【F:server/internal/http/handlers/app.go†L253-L269】
+- `/v1/images/generate` hanya menerima **JSON prompt**. Worker akan membaca `prompt.source_asset.asset_id` bila disediakan, mengambil metadata/file dari tabel aset, dan baru meneruskan ke provider sehingga tidak perlu mengirim ulang file besar setiap kali generate.【F:server/internal/http/handlers/images.go†L297-L347】【F:server/cmd/worker/main.go†L258-L333】
+
+Alur ini memungkinkan satu upload dipakai oleh banyak job, menjaga request generate tetap ringan, dan memastikan worker punya hak akses terhadap file yang sudah diverifikasi kepemilikannya.
+
+Untuk menguji hingga status `SUCCEEDED`:
+
+1. Jalankan upload, simpan `asset_id` ke variabel `upload_asset_id`.
+2. Kirim generate/enhance dengan `prompt.source_asset.asset_id` tersebut.
+3. Pantau `{{base_url}}/images/{{job_id}}/status` sampai `status` menjadi `SUCCEEDED` (response awal dari enqueue berisi `job_id`).【F:server/internal/http/handlers/images.go†L349-L369】
+4. Pastikan file output tersimpan di folder storage (contoh `server/storage/...`) dan dapat diakses melalui:
+   - URL statik `http://localhost:8080/static/...` karena router otomatis mem-publish direktori storage,【F:server/internal/http/httpapi/router.go†L24-L31】
+   - Endpoint `{{base_url}}/assets` dan `{{base_url}}/assets/{id}/download` yang menarik metadata serta signed URL lokal.【F:server/internal/http/handlers/assets.go†L14-L85】
+
+Dengan mengikuti alur di atas, Anda bisa memverifikasi bahwa upload dipakai ulang sebagai payload generate sekaligus memvalidasi integrasi storage, worker, dan endpoint aset.
 
 - **Videos Generate**
 
@@ -226,7 +266,7 @@ Endpoint privat memerlukan JWT. Jika belum memiliki Google ID Token valid:
   }
   ```
 
-## 7. Urutan Uji Coba yang Direkomendasikan
+## 8. Urutan Uji Coba yang Direkomendasikan
 
 1. Jalankan request publik (`healthz`, `stats/summary`, `donations/testimonials`) untuk memastikan API dan koneksi database aktif.【F:server/internal/http/handlers/health.go†L7-L9】【F:server/internal/http/handlers/stats.go†L9-L25】【F:server/internal/http/handlers/donations.go†L42-L74】
 2. Pastikan JWT valid dengan memanggil `/v1/me`; cek kuota harian sesuai nilai yang diinsert pada langkah persiapan.【F:server/internal/http/handlers/auth.go†L101-L125】
