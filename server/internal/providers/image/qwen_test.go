@@ -3,6 +3,7 @@ package image
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"server/internal/providers/qwen"
@@ -14,10 +15,12 @@ type stubQwenClient struct {
 	hasCredentials bool
 	calls          int
 	model          string
+	lastReq        qwen.ImageRequest
 }
 
 func (s *stubQwenClient) GenerateImage(ctx context.Context, req qwen.ImageRequest) (*qwen.ImageAsset, error) {
 	s.calls++
+	s.lastReq = req
 	return s.asset, s.err
 }
 
@@ -122,5 +125,27 @@ func TestQwenGeneratorSuccess(t *testing.T) {
 	}
 	if client.calls != 1 {
 		t.Fatalf("qwen client calls = %d, want 1", client.calls)
+	}
+}
+
+func TestQwenGeneratorDefaultsEnhanceWorkflowForSourceImage(t *testing.T) {
+	generated := &qwen.ImageAsset{URL: "https://example.com/image.png", Format: "image/png", Width: 1024, Height: 1024}
+	client := &stubQwenClient{hasCredentials: true, asset: generated}
+	gen := NewQwenGenerator(client, nil)
+	req := GenerateRequest{
+		Prompt: "hello",
+		SourceImage: &SourceImage{
+			Data: []byte{0x01, 0x02},
+			MIME: "image/png",
+		},
+	}
+	if _, err := gen.Generate(context.Background(), req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if client.lastReq.SourceImage == nil {
+		t.Fatalf("source image not forwarded to qwen client")
+	}
+	if got := strings.TrimSpace(client.lastReq.Workflow.Mode); got != string(WorkflowModeEnhance) {
+		t.Fatalf("workflow mode = %q, want %q", got, WorkflowModeEnhance)
 	}
 }

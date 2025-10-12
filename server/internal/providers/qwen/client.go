@@ -112,12 +112,13 @@ type generationContent struct {
 }
 
 type generationImage struct {
-	Format string `json:"format,omitempty"`
-	Data   string `json:"image_bytes,omitempty"`
-	URL    string `json:"image_url,omitempty"`
-	Width  int    `json:"width,omitempty"`
-	Height int    `json:"height,omitempty"`
-	Name   string `json:"name,omitempty"`
+	Format   string `json:"format,omitempty"`
+	MIMEType string `json:"mime_type,omitempty"`
+	Data     string `json:"image_bytes,omitempty"`
+	URL      string `json:"image_url,omitempty"`
+	Width    int    `json:"width,omitempty"`
+	Height   int    `json:"height,omitempty"`
+	Name     string `json:"name,omitempty"`
 }
 
 type generationParams struct {
@@ -226,11 +227,12 @@ func (c *Client) GenerateImage(ctx context.Context, req ImageRequest) (*ImageAss
 	if prompt == "" {
 		return nil, errors.New("qwen: prompt is required")
 	}
+	imageContent := encodeImageContent(req.SourceImage)
 	contents := make([]generationContent, 0, 2)
-	if img := encodeImageContent(req.SourceImage); img != nil {
-		contents = append(contents, generationContent{Image: img})
-	}
 	contents = append(contents, generationContent{Text: prompt})
+	if imageContent != nil {
+		contents = append(contents, generationContent{Image: imageContent})
+	}
 	payload := generationRequest{
 		Model: c.model,
 		Input: generationInput{
@@ -252,9 +254,12 @@ func (c *Client) GenerateImage(ctx context.Context, req ImageRequest) (*ImageAss
 	if quality := strings.TrimSpace(req.Quality); quality != "" {
 		payload.Parameters.Quality = quality
 	}
-	payload.Parameters.Style = "product-photography"
-	if extend := c.promptExtend; extend {
-		payload.Parameters.PromptExtend = &extend
+	editing := imageContent != nil
+	if !editing {
+		payload.Parameters.Style = "product-photography"
+		if extend := c.promptExtend; extend {
+			payload.Parameters.PromptExtend = &extend
+		}
 	}
 	if req.Seed > 0 {
 		payload.Parameters.Seed = &req.Seed
@@ -264,7 +269,7 @@ func (c *Client) GenerateImage(ctx context.Context, req ImageRequest) (*ImageAss
 	if loc := strings.TrimSpace(req.Locale); loc != "" {
 		payload.Parameters.Locale = loc
 	}
-	if wf := buildWorkflowParams(req.Workflow); wf != nil {
+	if wf := buildWorkflowParams(req.Workflow, editing); wf != nil {
 		payload.Parameters.Workflow = wf
 	}
 
@@ -378,8 +383,19 @@ func encodeImageContent(src *SourceImage) *generationImage {
 		return nil
 	}
 	payload := &generationImage{}
+	if mime := strings.TrimSpace(src.MIME); mime != "" {
+		payload.MIMEType = mime
+	}
 	if format := inferSourceFormat(src); format != "" {
 		payload.Format = format
+		if payload.MIMEType == "" {
+			switch format {
+			case "jpg":
+				payload.MIMEType = "image/jpeg"
+			default:
+				payload.MIMEType = "image/" + format
+			}
+		}
 	}
 	if dataAvailable {
 		payload.Data = base64.StdEncoding.EncodeToString(src.Data)
@@ -470,8 +486,11 @@ func normalizeImageFormat(ext string) string {
 	}
 }
 
-func buildWorkflowParams(cfg Workflow) *workflowParams {
+func buildWorkflowParams(cfg Workflow, editing bool) *workflowParams {
 	mode := strings.TrimSpace(cfg.Mode)
+	if editing && (mode == "" || mode == "generate") {
+		mode = "enhance"
+	}
 	if mode == "" || mode == "generate" {
 		return nil
 	}
