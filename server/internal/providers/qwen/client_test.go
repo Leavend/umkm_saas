@@ -82,7 +82,7 @@ func TestGenerateImageEditingPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
-        transport.setJSONResponse("/api/v1/services/aigc/multimodal-generation/generation", map[string]any{
+	transport.setJSONResponse("/api/v1/services/aigc/multimodal-generation/generation", map[string]any{
 		"output": map[string]any{
 			"choices": []any{
 				map[string]any{
