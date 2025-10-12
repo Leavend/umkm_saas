@@ -372,20 +372,25 @@ func encodeImageContent(src *SourceImage) *generationImage {
 	if src == nil {
 		return nil
 	}
-	if len(src.Data) == 0 && strings.TrimSpace(src.URL) == "" {
+	dataAvailable := len(src.Data) > 0
+	url := strings.TrimSpace(src.URL)
+	if !dataAvailable && url == "" {
 		return nil
 	}
 	payload := &generationImage{}
 	if format := inferSourceFormat(src); format != "" {
 		payload.Format = format
 	}
-	if len(src.Data) > 0 {
+	if dataAvailable {
 		payload.Data = base64.StdEncoding.EncodeToString(src.Data)
-		payload.Width = src.Width
-		payload.Height = src.Height
-	}
-	if strings.TrimSpace(src.URL) != "" {
-		payload.URL = strings.TrimSpace(src.URL)
+		if src.Width > 0 {
+			payload.Width = src.Width
+		}
+		if src.Height > 0 {
+			payload.Height = src.Height
+		}
+	} else {
+		payload.URL = url
 	}
 	name := strings.TrimSpace(src.Filename)
 	if name == "" {

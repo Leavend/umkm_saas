@@ -14,6 +14,7 @@ func TestEncodeImageContentWithInlineData(t *testing.T) {
 		Height:   480,
 		MIME:     "image/png",
 		Filename: "ignored.jpg",
+		URL:      "https://cdn.example.com/some.png",
 	}
 
 	encoded := encodeImageContent(src)
@@ -28,6 +29,9 @@ func TestEncodeImageContentWithInlineData(t *testing.T) {
 	}
 	if encoded.Data == "" {
 		t.Fatalf("expected data to be populated")
+	}
+	if encoded.URL != "" {
+		t.Fatalf("url should be empty when data is provided")
 	}
 	decoded, err := base64.StdEncoding.DecodeString(encoded.Data)
 	if err != nil {
