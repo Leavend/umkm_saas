@@ -114,7 +114,7 @@ type generationContent struct {
 type generationImage struct {
 	Format string `json:"format,omitempty"`
 	Data   string `json:"image_bytes,omitempty"`
-	URL    string `json:"url,omitempty"`
+	URL    string `json:"image_url,omitempty"`
 	Width  int    `json:"width,omitempty"`
 	Height int    `json:"height,omitempty"`
 	Name   string `json:"name,omitempty"`
@@ -376,26 +376,93 @@ func encodeImageContent(src *SourceImage) *generationImage {
 		return nil
 	}
 	payload := &generationImage{}
-	if strings.TrimSpace(src.MIME) != "" {
-		payload.Format = strings.TrimPrefix(strings.ToLower(src.MIME), "image/")
+	if format := inferSourceFormat(src); format != "" {
+		payload.Format = format
 	}
 	if len(src.Data) > 0 {
 		payload.Data = base64.StdEncoding.EncodeToString(src.Data)
 		payload.Width = src.Width
 		payload.Height = src.Height
 	}
-	if payload.Format == "" && strings.TrimSpace(src.Filename) != "" {
-		if idx := strings.LastIndex(src.Filename, "."); idx > -1 && idx < len(src.Filename)-1 {
-			payload.Format = strings.TrimPrefix(strings.ToLower(src.Filename[idx+1:]), ".")
-		}
-	}
 	if strings.TrimSpace(src.URL) != "" {
 		payload.URL = strings.TrimSpace(src.URL)
 	}
-	if strings.TrimSpace(src.Filename) != "" {
-		payload.Name = strings.TrimSpace(src.Filename)
+	name := strings.TrimSpace(src.Filename)
+	if name == "" {
+		name = strings.TrimSpace(src.AssetID)
+	}
+	if name != "" {
+		payload.Name = name
 	}
 	return payload
+}
+
+func inferSourceFormat(src *SourceImage) string {
+	if src == nil {
+		return ""
+	}
+	if mime := strings.TrimSpace(src.MIME); mime != "" {
+		return normalizeImageFormat(strings.TrimPrefix(strings.ToLower(mime), "image/"))
+	}
+	if ext := extensionFromName(src.Filename); ext != "" {
+		return ext
+	}
+	if ext := extensionFromURL(src.URL); ext != "" {
+		return ext
+	}
+	return ""
+}
+
+func extensionFromURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(raw); err == nil {
+		if ext := extensionFromName(parsed.Path); ext != "" {
+			return ext
+		}
+	}
+	return extensionFromName(raw)
+}
+
+func extensionFromName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	if idx := strings.LastIndex(name, "."); idx > -1 && idx < len(name)-1 {
+		ext := name[idx+1:]
+		if hashIdx := strings.Index(ext, "#"); hashIdx > -1 {
+			ext = ext[:hashIdx]
+		}
+		if queryIdx := strings.Index(ext, "?"); queryIdx > -1 {
+			ext = ext[:queryIdx]
+		}
+		return normalizeImageFormat(ext)
+	}
+	return ""
+}
+
+func normalizeImageFormat(ext string) string {
+	ext = strings.ToLower(strings.TrimSpace(ext))
+	ext = strings.TrimPrefix(ext, ".")
+	switch ext {
+	case "jpeg":
+		return "jpeg"
+	case "jpg":
+		return "jpg"
+	case "png":
+		return "png"
+	case "webp":
+		return "webp"
+	case "bmp":
+		return "bmp"
+	case "gif":
+		return "gif"
+	default:
+		return ext
+	}
 }
 
 func buildWorkflowParams(cfg Workflow) *workflowParams {
