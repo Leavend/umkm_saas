@@ -64,29 +64,25 @@ func (g *QwenGenerator) Generate(ctx context.Context, req GenerateRequest) ([]As
 		RetouchStrength: strings.TrimSpace(req.Workflow.RetouchStrength),
 		Notes:           strings.TrimSpace(req.Workflow.Notes),
 	}
+	source := qwenSourceFromRequest(req.SourceImage)
 	assets := make([]Asset, 0, quantity)
 	for i := 0; i < quantity; i++ {
-		prompt := req.Prompt
-		if quantity > 1 {
-			prompt = fmt.Sprintf("%s\nVariation #%d for the same campaign.", strings.TrimSpace(req.Prompt), i+1)
-		}
+		prompt := buildVariationPrompt(strings.TrimSpace(req.Prompt), quantity, i)
 		seed := deterministicSeed(req.RequestID, req.Provider, req.Locale, prompt, i)
-		source := qwenSourceFromRequest(req.SourceImage)
-		workflow := baseWorkflow
-		if source != nil && (workflow.Mode == "" || workflow.Mode == string(WorkflowModeGenerate)) {
-			workflow.Mode = string(WorkflowModeEnhance)
-		}
-		asset, err := g.client.GenerateImage(ctx, qwen.ImageRequest{
+		workflow := derivedWorkflow(baseWorkflow, source)
+		imageReq := qwen.ImageRequest{
 			Prompt:         prompt,
-			NegativePrompt: req.NegativePrompt,
+			NegativePrompt: strings.TrimSpace(req.NegativePrompt),
 			Size:           size,
 			Seed:           seed,
 			RequestID:      req.RequestID,
-			Quality:        req.Quality,
-			Locale:         req.Locale,
+			Quality:        strings.TrimSpace(req.Quality),
+			Locale:         strings.TrimSpace(req.Locale),
 			Workflow:       workflow,
 			SourceImage:    source,
-		})
+		}
+
+		asset, err := g.invokeQwen(ctx, imageReq)
 		if err != nil {
 			if shouldFallbackToSynthetic(err) && g.fallback != nil {
 				return g.fallback.Generate(ctx, req)
@@ -114,6 +110,23 @@ func (g *QwenGenerator) String() string {
 
 var _ Generator = (*QwenGenerator)(nil)
 
+func (g *QwenGenerator) invokeQwen(ctx context.Context, req qwen.ImageRequest) (*qwen.ImageAsset, error) {
+	asset, err := g.client.GenerateImage(ctx, req)
+	if err == nil {
+		return asset, nil
+	}
+	if !isTransientQwenError(err) {
+		return nil, err
+	}
+
+	simplified := simplifyQwenRequest(req)
+	asset, retryErr := g.client.GenerateImage(ctx, simplified)
+	if retryErr != nil {
+		return nil, retryErr
+	}
+	return asset, nil
+}
+
 func shouldFallbackToSynthetic(err error) bool {
 	if err == nil {
 		return false
@@ -125,7 +138,7 @@ func shouldFallbackToSynthetic(err error) bool {
 	if strings.Contains(msg, "unauthorized") || strings.Contains(msg, "forbidden") {
 		return true
 	}
-	if strings.Contains(msg, "internalerror") || strings.Contains(msg, "internal error") || strings.Contains(msg, "service unavailable") || strings.Contains(msg, "server unavailable") {
+	if isTransientQwenError(err) {
 		return true
 	}
 	return false
@@ -188,4 +201,56 @@ func normalizeFormat(mime string) string {
 		}
 		return "image/png"
 	}
+}
+
+func buildVariationPrompt(prompt string, total, index int) string {
+	trimmed := strings.TrimSpace(prompt)
+	if total <= 1 {
+		return trimmed
+	}
+	if trimmed == "" {
+		return fmt.Sprintf("Variation #%d for the same campaign.", index+1)
+	}
+	return fmt.Sprintf("%s\nVariation #%d for the same campaign.", trimmed, index+1)
+}
+
+func derivedWorkflow(base qwen.Workflow, source *qwen.SourceImage) qwen.Workflow {
+	workflow := base
+	if source != nil {
+		if workflow.Mode == "" || workflow.Mode == string(WorkflowModeGenerate) {
+			workflow.Mode = string(WorkflowModeEnhance)
+		}
+	}
+	return workflow
+}
+
+func simplifyQwenRequest(req qwen.ImageRequest) qwen.ImageRequest {
+	simplified := req
+	simplified.NegativePrompt = ""
+	if simplified.Workflow.Mode == "" || simplified.Workflow.Mode == string(WorkflowModeGenerate) {
+		simplified.Workflow = qwen.Workflow{}
+	} else {
+		simplified.Workflow.Notes = strings.TrimSpace(simplified.Workflow.Notes)
+	}
+	return simplified
+}
+
+func isTransientQwenError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if msg == "" {
+		return false
+	}
+	if strings.Contains(msg, "internalerror") || strings.Contains(msg, "internal error") {
+		return true
+	}
+	if strings.Contains(msg, "service unavailable") || strings.Contains(msg, "server unavailable") {
+		return true
+	}
+	if strings.Contains(msg, "timeout") {
+		return true
+	}
+	return false
 }
