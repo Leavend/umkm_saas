@@ -90,6 +90,28 @@ func TestQwenGeneratorFallsBackOnMissingAPIKeyError(t *testing.T) {
 	}
 }
 
+func TestQwenGeneratorFallsBackOnInternalError(t *testing.T) {
+	fallback := &stubGenerator{assets: []Asset{{URL: "synthetic"}}}
+	client := &stubQwenClient{
+		hasCredentials: true,
+		err:            errors.New("qwen: The request processing has failed due to some unknown error. (InternalError)"),
+	}
+	gen := NewQwenGenerator(client, fallback)
+	assets, err := gen.Generate(context.Background(), GenerateRequest{Prompt: "sample"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if client.calls != 1 {
+		t.Fatalf("expected qwen client to be invoked once, got %d", client.calls)
+	}
+	if fallback.calls != 1 {
+		t.Fatalf("fallback calls = %d, want 1", fallback.calls)
+	}
+	if len(assets) != 1 || assets[0].URL != "synthetic" {
+		t.Fatalf("unexpected assets: %#v", assets)
+	}
+}
+
 func TestQwenGeneratorReturnsErrorWhenRemoteFails(t *testing.T) {
 	fallback := &stubGenerator{assets: []Asset{{URL: "unused"}}}
 	client := &stubQwenClient{

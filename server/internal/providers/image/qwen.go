@@ -122,7 +122,13 @@ func shouldFallbackToSynthetic(err error) bool {
 		return true
 	}
 	msg := strings.ToLower(strings.TrimSpace(err.Error()))
-	return strings.Contains(msg, "unauthorized") || strings.Contains(msg, "forbidden")
+	if strings.Contains(msg, "unauthorized") || strings.Contains(msg, "forbidden") {
+		return true
+	}
+	if strings.Contains(msg, "internalerror") || strings.Contains(msg, "internal error") || strings.Contains(msg, "service unavailable") || strings.Contains(msg, "server unavailable") {
+		return true
+	}
+	return false
 }
 
 func qwenSourceFromRequest(src *SourceImage) *qwen.SourceImage {
