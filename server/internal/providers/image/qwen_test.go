@@ -157,7 +157,7 @@ func TestQwenGeneratorRetriesWithSimplifiedPayload(t *testing.T) {
 	client := &stubQwenClient{
 		hasCredentials: true,
 		queue: []stubQwenResponse{
-			{err: errors.New("qwen: internal error")},
+			{err: errors.New("qwen: status 400: invalid parameter locale")},
 			{asset: generated},
 		},
 	}
@@ -165,6 +165,8 @@ func TestQwenGeneratorRetriesWithSimplifiedPayload(t *testing.T) {
 	req := GenerateRequest{
 		Prompt:         "hello",
 		NegativePrompt: "avoid",
+		Quality:        "hd",
+		Locale:         "id",
 		Workflow: Workflow{
 			Mode:  WorkflowModeGenerate,
 			Notes: "colour balance",
@@ -187,6 +189,15 @@ func TestQwenGeneratorRetriesWithSimplifiedPayload(t *testing.T) {
 	}
 	if second.Workflow != (qwen.Workflow{}) {
 		t.Fatalf("second request workflow should be empty, got %#v", second.Workflow)
+	}
+	if second.Quality != "" {
+		t.Fatalf("second request should clear quality, got %q", second.Quality)
+	}
+	if second.Locale != "" {
+		t.Fatalf("second request should clear locale, got %q", second.Locale)
+	}
+	if second.Seed != 0 {
+		t.Fatalf("second request should clear seed, got %d", second.Seed)
 	}
 	if len(assets) != 1 || assets[0].URL != generated.URL {
 		t.Fatalf("unexpected assets: %#v", assets)

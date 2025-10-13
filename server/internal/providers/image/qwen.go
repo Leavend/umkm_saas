@@ -115,7 +115,7 @@ func (g *QwenGenerator) invokeQwen(ctx context.Context, req qwen.ImageRequest) (
 	if err == nil {
 		return asset, nil
 	}
-	if !isTransientQwenError(err) {
+	if !shouldRetryQwenError(err) {
 		return nil, err
 	}
 
@@ -227,7 +227,11 @@ func derivedWorkflow(base qwen.Workflow, source *qwen.SourceImage) qwen.Workflow
 func simplifyQwenRequest(req qwen.ImageRequest) qwen.ImageRequest {
 	simplified := req
 	simplified.NegativePrompt = ""
-	if simplified.Workflow.Mode == "" || simplified.Workflow.Mode == string(WorkflowModeGenerate) {
+	simplified.Quality = ""
+	simplified.Locale = ""
+	simplified.RequestID = ""
+	simplified.Seed = 0
+	if simplified.Workflow.Mode == "" || simplified.Workflow.Mode == string(WorkflowModeGenerate) || simplified.SourceImage == nil {
 		simplified.Workflow = qwen.Workflow{}
 	} else {
 		simplified.Workflow.Notes = strings.TrimSpace(simplified.Workflow.Notes)
@@ -251,6 +255,31 @@ func isTransientQwenError(err error) bool {
 	}
 	if strings.Contains(msg, "timeout") {
 		return true
+	}
+	return false
+}
+
+func shouldRetryQwenError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isTransientQwenError(err) {
+		return true
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if msg == "" {
+		return false
+	}
+	retryTokens := []string{
+		"invalid parameter",
+		"invalid request",
+		"unsupported parameter",
+		"bad request",
+	}
+	for _, token := range retryTokens {
+		if strings.Contains(msg, token) {
+			return true
+		}
 	}
 	return false
 }
