@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -15,6 +16,12 @@ type videoGenerateRequest struct {
 	Provider string `json:"provider"`
 	Prompt   string `json:"prompt"`
 	Locale   string `json:"locale"`
+}
+
+type jobResponse struct {
+	JobID          string `json:"job_id"`
+	Status         string `json:"status"`
+	RemainingQuota int    `json:"remaining_quota"`
 }
 
 func (a *App) VideosGenerate(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +61,33 @@ func (a *App) VideosGenerate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) VideoStatus(w http.ResponseWriter, r *http.Request) {
-	a.ImageStatus(w, r)
+	userID := a.currentUserID(r)
+	if userID == "" {
+		a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
+		return
+	}
+	jobID := chi.URLParam(r, "job_id")
+	if jobID == "" {
+		a.error(w, http.StatusBadRequest, "bad_request", "job_id required")
+		return
+	}
+	job, err := a.loadJobForUser(r.Context(), jobID, userID)
+	if err != nil {
+		a.error(w, http.StatusNotFound, "not_found", "job not found")
+		return
+	}
+	a.json(w, http.StatusOK, map[string]any{
+		"id":           job.ID,
+		"user_id":      job.UserID,
+		"task_type":    job.TaskType,
+		"status":       job.Status,
+		"provider":     job.Provider,
+		"quantity":     job.Quantity,
+		"aspect_ratio": job.Aspect,
+		"created_at":   job.CreatedAt,
+		"updated_at":   job.UpdatedAt,
+		"properties":   json.RawMessage(job.Properties),
+	})
 }
 
 func (a *App) VideoAssets(w http.ResponseWriter, r *http.Request) {
@@ -102,4 +135,26 @@ func (a *App) VideoAssets(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	a.json(w, http.StatusOK, map[string]any{"items": items})
+}
+
+type jobRecord struct {
+	ID         string
+	UserID     string
+	TaskType   string
+	Status     string
+	Provider   string
+	Quantity   int
+	Aspect     string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	Properties []byte
+}
+
+func (a *App) loadJobForUser(ctx context.Context, jobID, userID string) (*jobRecord, error) {
+	row := a.SQL.QueryRow(ctx, sqlinline.QSelectJobStatus, jobID, userID)
+	var job jobRecord
+	if err := row.Scan(&job.ID, &job.UserID, &job.TaskType, &job.Status, &job.Provider, &job.Quantity, &job.Aspect, &job.CreatedAt, &job.UpdatedAt, &job.Properties); err != nil {
+		return nil, err
+	}
+	return &job, nil
 }
