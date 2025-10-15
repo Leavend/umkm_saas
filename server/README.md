@@ -91,12 +91,12 @@ curl -i -X POST http://localhost:8080/v1/auth/google/verify \
 # Current user
 curl -i -H "Authorization: Bearer <JWT>" http://localhost:8080/v1/me
 
-# Generate images (async via worker)
-curl -i -X POST http://localhost:8080/v1/images/generate \
-  -H "Authorization: Bearer <JWT>" -H 'Content-Type: application/json' \
+# Generate edited images synchronously (DashScope "qwen-image-edit")
+curl -i -X POST http://localhost:8080/v1/images/generate 
+  -H "Authorization: Bearer <JWT>" -H 'Content-Type: application/json' 
   -d '{
-    "provider":"gemini",
-    "quantity":1,
+    "provider":"qwen-image-plus",
+    "quantity":2,
     "aspect_ratio":"1:1",
     "prompt":{
       "title":"Nasi goreng seafood premium",
@@ -104,20 +104,25 @@ curl -i -X POST http://localhost:8080/v1/images/generate \
       "style":"elegan",
       "background":"marble",
       "instructions":"Lighting lembut",
-      "watermark":{"enabled":true,"text":"Warung Nasgor Bapak","position":"bottom-right"},
-      "references":[],
-      "extras":{"locale":"id","quality":"hd"}
+      "watermark":{"enabled":false},
+      "source_asset":{
+        "asset_id":"upl_abc123",
+        "url":"https://cdn.example.com/uploads/upl_abc123.png"
+      },
+      "extras":{"negative_prompt":"blurry"}
     }
   }'
 
-# Check job status
-curl -i -H "Authorization: Bearer <JWT>" http://localhost:8080/v1/images/<JOB_ID>/status
+# Inspect job payload, prompts, and output URLs
+curl -i -H "Authorization: Bearer <JWT>" http://localhost:8080/v1/images/jobs/<JOB_ID>
 
-# Check job assets
-curl -i -H "Authorization: Bearer <JWT>" http://localhost:8080/v1/images/<JOB_ID>/assets
+# Proxy-download the first generated image
+curl -L -H "Authorization: Bearer <JWT>" 
+  http://localhost:8080/v1/images/<JOB_ID>/download --output edited.png
 
-# Zip assets
-curl -i -X POST -H "Authorization: Bearer <JWT>" http://localhost:8080/v1/images/<JOB_ID>/zip
+# Download all generated images as a zip archive
+curl -L -H "Authorization: Bearer <JWT>" 
+  http://localhost:8080/v1/images/<JOB_ID>/download.zip --output edited.zip
 
 # Generate videos (async via worker)
 curl -i -X POST -H "Authorization: Bearer <JWT>" http://localhost:8080/v1/videos/generate \
