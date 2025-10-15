@@ -707,8 +707,6 @@ func extractImageURLs(raw []byte) []string {
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil
-	case <-ctx.Done():
-		return ctx.Err()
 	}
 	urls := make([]string, 0, len(payload.Images))
 	for _, item := range payload.Images {
