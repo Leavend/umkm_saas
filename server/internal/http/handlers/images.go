@@ -14,6 +14,7 @@ import (
 	_ "image/png"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -332,6 +333,10 @@ func (a *App) ImagesGenerate(w http.ResponseWriter, r *http.Request) {
 	parsedURL, err := url.Parse(sourceURL)
 	if err != nil || parsedURL == nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
 		a.error(w, http.StatusUnprocessableEntity, "invalid_source", "prompt.source_asset.url must be a public http(s) URL")
+		return
+	}
+	if err := ensurePublicHTTPURL(parsedURL); err != nil {
+		a.error(w, http.StatusUnprocessableEntity, "invalid_source", err.Error())
 		return
 	}
 
@@ -700,4 +705,22 @@ func extractImageURLs(raw []byte) []string {
 		}
 	}
 	return urls
+}
+
+func ensurePublicHTTPURL(u *url.URL) error {
+	host := strings.TrimSpace(u.Hostname())
+	if host == "" {
+		return errors.New("prompt.source_asset.url must include a hostname")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsPrivate() || ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() {
+			return errors.New("prompt.source_asset.url must be publicly accessible")
+		}
+		return nil
+	}
+	lower := strings.ToLower(host)
+	if lower == "localhost" || strings.HasSuffix(lower, ".local") || strings.HasSuffix(lower, ".internal") {
+		return errors.New("prompt.source_asset.url must be publicly accessible")
+	}
+	return nil
 }

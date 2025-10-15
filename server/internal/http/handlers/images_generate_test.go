@@ -204,6 +204,21 @@ func TestImagesGenerateHandler(t *testing.T) {
 			},
 		},
 	}, {
+		name:       "reject private source",
+		editor:     func() *stubEditor { return &stubEditor{urls: []string{"https://example.com/one.png"}} },
+		wantStatus: http.StatusUnprocessableEntity,
+		wantImages: 0,
+		wantJob:    "",
+		body: map[string]any{
+			"provider": "qwen-image-plus",
+			"quantity": 1,
+			"prompt": map[string]any{
+				"title":        "Sample",
+				"watermark":    map[string]any{"enabled": false},
+				"source_asset": map[string]any{"asset_id": "upl", "url": "http://localhost:1919/static/uploads/file.png"},
+			},
+		},
+	}, {
 		name:       "editor failure",
 		editor:     func() *stubEditor { return &stubEditor{err: errors.New("generation failed")} },
 		wantStatus: http.StatusBadGateway,

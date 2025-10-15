@@ -172,6 +172,9 @@ Endpoint privat memerlukan JWT. Jika belum memiliki Google ID Token valid:
   ```
 
 - **Contoh Respons Upload** — simpan `asset_id` dan `url` sebagai variabel Postman (`upload_asset_id`, `upload_asset_url`).
+- **Catatan penting**: URL yang dikembalikan perlu dapat diakses publik (bukan `localhost` atau jaringan privat) agar DashScope
+  dapat mengunduhnya saat proses edit. Pada lingkungan lokal, unggah file ke storage publik atau gunakan URL eksternal yang Anda
+  kontrol untuk pengujian endpoint generate.
 
   ```json
   {
