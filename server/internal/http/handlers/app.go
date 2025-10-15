@@ -40,6 +40,11 @@ type App struct {
 	ImageEditor         imagegen.Editor
 	imageLimiter        chan struct{}
 	sourceHostAllowlist map[string]struct{}
+	sourceFetcher       httpDoer
+}
+
+type httpDoer interface {
+	Do(req *http.Request) (*http.Response, error)
 }
 
 func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
@@ -250,6 +255,7 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 		ImageEditor:         imageEditor,
 		imageLimiter:        make(chan struct{}, 2),
 		sourceHostAllowlist: allowedHosts,
+		sourceFetcher:       &http.Client{Timeout: 20 * time.Second},
 	}
 }
 

@@ -3,10 +3,12 @@ package imagegen
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 )
@@ -45,18 +47,37 @@ func NewQwenClient(opts QwenOptions) *QwenClient {
 }
 
 type qwenRequest struct {
-	Model string `json:"model"`
-	Input struct {
-		Messages []struct {
-			Role    string        `json:"role"`
-			Content []interface{} `json:"content"`
-		} `json:"messages"`
-	} `json:"input"`
-	Parameters struct {
-		NegativePrompt string `json:"negative_prompt,omitempty"`
-		Watermark      bool   `json:"watermark"`
-		Seed           *int   `json:"seed,omitempty"`
-	} `json:"parameters"`
+	Model  string         `json:"model"`
+	Input  qwenInput      `json:"input"`
+	Params qwenParameters `json:"parameters"`
+}
+
+type qwenInput struct {
+	Messages []qwenMessage `json:"messages"`
+}
+
+type qwenMessage struct {
+	Role    string        `json:"role"`
+	Content []qwenContent `json:"content"`
+}
+
+type qwenContent struct {
+	Text  string     `json:"text,omitempty"`
+	Image *qwenImage `json:"image,omitempty"`
+}
+
+type qwenImage struct {
+	URL      string `json:"image_url,omitempty"`
+	Data     string `json:"image_bytes,omitempty"`
+	MIMEType string `json:"mime_type,omitempty"`
+	Format   string `json:"format,omitempty"`
+	Name     string `json:"name,omitempty"`
+}
+
+type qwenParameters struct {
+	NegativePrompt string `json:"negative_prompt,omitempty"`
+	Watermark      bool   `json:"watermark"`
+	Seed           *int   `json:"seed,omitempty"`
 }
 
 type qwenResp struct {
@@ -71,36 +92,30 @@ type qwenResp struct {
 	Message string `json:"message"`
 }
 
-func (c *QwenClient) EditOnce(ctx context.Context, imageURL, instruction string, watermark bool, negative string, seed *int) (string, error) {
+func (c *QwenClient) EditOnce(ctx context.Context, source SourceImage, instruction string, watermark bool, negative string, seed *int) (string, error) {
 	if c == nil {
 		return "", errors.New("qwen client not configured")
 	}
 	if c.token == "" {
 		return "", errors.New("qwen: API key is missing")
 	}
-	trimmed := strings.TrimSpace(imageURL)
-	if trimmed == "" {
-		return "", errors.New("qwen: image url required")
+	payload := qwenRequest{Model: "qwen-image-edit"}
+	imageContent, err := buildImageContent(source)
+	if err != nil {
+		return "", err
 	}
-	var payload qwenRequest
-	payload.Model = "qwen-image-edit"
-	msg := struct {
-		Role    string        `json:"role"`
-		Content []interface{} `json:"content"`
-	}{
-		Role: "user",
-		Content: []interface{}{
-			map[string]string{"image": trimmed},
-			map[string]string{"text": instruction},
-		},
+	msg := qwenMessage{Role: "user"}
+	if imageContent != nil {
+		msg.Content = append(msg.Content, qwenContent{Image: imageContent})
 	}
+	msg.Content = append(msg.Content, qwenContent{Text: instruction})
 	payload.Input.Messages = append(payload.Input.Messages, msg)
-	payload.Parameters.Watermark = watermark
+	payload.Params.Watermark = watermark
 	if negative = strings.TrimSpace(negative); negative != "" {
-		payload.Parameters.NegativePrompt = negative
+		payload.Params.NegativePrompt = negative
 	}
 	if seed != nil {
-		payload.Parameters.Seed = seed
+		payload.Params.Seed = seed
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -144,4 +159,125 @@ func (c *QwenClient) EditOnce(ctx context.Context, imageURL, instruction string,
 		return "", errors.New("qwen: missing image url")
 	}
 	return url, nil
+}
+
+func buildImageContent(source SourceImage) (*qwenImage, error) {
+	hasData := len(source.Data) > 0
+	url := strings.TrimSpace(source.URL)
+	if !hasData && url == "" {
+		return nil, errors.New("qwen: image source required")
+	}
+	img := &qwenImage{}
+	if hasData {
+		img.Data = base64.StdEncoding.EncodeToString(source.Data)
+	} else {
+		img.URL = url
+	}
+	if name := sanitizeName(source.Name); name != "" {
+		img.Name = name
+	} else if !hasData {
+		if derived := sanitizeName(path.Base(url)); derived != "" {
+			img.Name = derived
+		}
+	}
+	format := inferFormat(source.MIMEType, source.Name, url)
+	if format == "" {
+		format = "png"
+	}
+	img.Format = format
+	mimeType := strings.TrimSpace(source.MIMEType)
+	if mimeType == "" {
+		mimeType = mimeFromFormat(format)
+	}
+	img.MIMEType = mimeType
+	return img, nil
+}
+
+func inferFormat(mimeType, name, url string) string {
+	if f := inferFormatFromMIME(mimeType); f != "" {
+		return f
+	}
+	if f := inferFormatFromName(name); f != "" {
+		return f
+	}
+	if f := inferFormatFromName(path.Base(url)); f != "" {
+		return f
+	}
+	return ""
+}
+
+func inferFormatFromMIME(mimeType string) string {
+	mimeType = strings.TrimSpace(strings.ToLower(mimeType))
+	if mimeType == "" {
+		return ""
+	}
+	if strings.HasPrefix(mimeType, "image/") {
+		return normalizeFormat(strings.TrimPrefix(mimeType, "image/"))
+	}
+	return ""
+}
+
+func inferFormatFromName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	if idx := strings.LastIndex(name, "."); idx > -1 && idx < len(name)-1 {
+		ext := name[idx+1:]
+		if q := strings.IndexAny(ext, "?#"); q >= 0 {
+			ext = ext[:q]
+		}
+		return normalizeFormat(ext)
+	}
+	return ""
+}
+
+func sanitizeName(name string) string {
+	cleaned := strings.TrimSpace(name)
+	cleaned = strings.Trim(cleaned, "\t\n\r")
+	cleaned = path.Base(cleaned)
+	if cleaned == "." || cleaned == "/" {
+		return ""
+	}
+	return cleaned
+}
+
+func normalizeFormat(ext string) string {
+	ext = strings.ToLower(strings.TrimSpace(ext))
+	ext = strings.TrimPrefix(ext, ".")
+	switch ext {
+	case "jpeg":
+		return "jpeg"
+	case "jpg":
+		return "jpg"
+	case "png":
+		return "png"
+	case "webp":
+		return "webp"
+	case "bmp":
+		return "bmp"
+	case "gif":
+		return "gif"
+	default:
+		return ext
+	}
+}
+
+func mimeFromFormat(format string) string {
+	switch format {
+	case "jpeg", "jpg":
+		return "image/jpeg"
+	case "png":
+		return "image/png"
+	case "webp":
+		return "image/webp"
+	case "bmp":
+		return "image/bmp"
+	case "gif":
+		return "image/gif"
+	case "":
+		return ""
+	default:
+		return "image/" + format
+	}
 }

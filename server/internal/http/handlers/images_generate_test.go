@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -139,16 +140,18 @@ func (s *stubDB) lastJob() *db.ImageJob {
 }
 
 type stubEditor struct {
-	mu    sync.Mutex
-	urls  []string
-	err   error
-	calls int
+	mu      sync.Mutex
+	urls    []string
+	err     error
+	calls   int
+	sources []imagegen.SourceImage
 }
 
-func (s *stubEditor) EditOnce(ctx context.Context, imageURL, instruction string, watermark bool, negative string, seed *int) (string, error) {
+func (s *stubEditor) EditOnce(ctx context.Context, source imagegen.SourceImage, instruction string, watermark bool, negative string, seed *int) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
+	s.sources = append(s.sources, source)
 	if s.err != nil {
 		return "", s.err
 	}
@@ -167,6 +170,8 @@ func TestImagesGenerateHandler(t *testing.T) {
 		wantImages int
 		wantJob    string
 		allowlist  []string
+		configure  func(app *App)
+		verify     func(t *testing.T, editor *stubEditor)
 	}{{
 		name: "success",
 		editor: func() *stubEditor {
@@ -237,6 +242,22 @@ func TestImagesGenerateHandler(t *testing.T) {
 				"source_asset": map[string]any{"asset_id": "upl", "url": "http://localhost:1919/static/uploads/file.png"},
 			},
 		},
+		configure: func(app *App) {
+			app.sourceFetcher = &stubFetcher{body: []byte{0x89, 0x50, 0x4e, 0x47}, contentType: "image/png"}
+		},
+		verify: func(t *testing.T, editor *stubEditor) {
+			editor.mu.Lock()
+			defer editor.mu.Unlock()
+			if len(editor.sources) != 1 {
+				t.Fatalf("expected 1 source, got %d", len(editor.sources))
+			}
+			if len(editor.sources[0].Data) == 0 {
+				t.Fatalf("expected source data to be populated for allowlisted host")
+			}
+			if editor.sources[0].MIMEType != "image/png" {
+				t.Fatalf("unexpected mime type: %s", editor.sources[0].MIMEType)
+			}
+		},
 	}, {
 		name:       "editor failure",
 		editor:     func() *stubEditor { return &stubEditor{err: errors.New("generation failed")} },
@@ -275,6 +296,9 @@ func TestImagesGenerateHandler(t *testing.T) {
 				imageLimiter:        make(chan struct{}, 2),
 				sourceHostAllowlist: allowlist,
 			}
+			if tc.configure != nil {
+				tc.configure(app)
+			}
 
 			bodyBytes, err := json.Marshal(tc.body)
 			if err != nil {
@@ -300,6 +324,10 @@ func TestImagesGenerateHandler(t *testing.T) {
 				}
 			}
 
+			if tc.verify != nil {
+				tc.verify(t, editor)
+			}
+
 			job := dbStub.lastJob()
 			if tc.wantJob == "" {
 				if job != nil {
@@ -321,4 +349,32 @@ func TestImagesGenerateHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+type stubFetcher struct {
+	mu          sync.Mutex
+	body        []byte
+	contentType string
+	status      int
+	err         error
+	calls       int
+}
+
+func (s *stubFetcher) Do(req *http.Request) (*http.Response, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if s.err != nil {
+		return nil, s.err
+	}
+	status := s.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	resp := &http.Response{StatusCode: status, Header: make(http.Header)}
+	if s.contentType != "" {
+		resp.Header.Set("Content-Type", s.contentType)
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(append([]byte(nil), s.body...)))
+	return resp, nil
 }

@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -335,6 +336,8 @@ func (a *App) ImagesGenerate(w http.ResponseWriter, r *http.Request) {
 		a.error(w, http.StatusUnprocessableEntity, "invalid_source", "prompt.source_asset.url must be a public http(s) URL")
 		return
 	}
+	host := strings.ToLower(parsedURL.Hostname())
+	_, allowlisted := a.sourceHostAllowlist[host]
 	if err := ensurePublicHTTPURL(parsedURL, a.sourceHostAllowlist); err != nil {
 		a.error(w, http.StatusUnprocessableEntity, "invalid_source", err.Error())
 		return
@@ -385,6 +388,13 @@ func (a *App) ImagesGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	source, err := a.prepareSourceImage(r.Context(), sourceURL, parsedURL, req.Prompt.SourceAsset.AssetID, allowlisted)
+	if err != nil {
+		_ = q.FailImageJob(r.Context(), db.FailImageJobParams{ID: jobID, Error: err.Error()})
+		a.error(w, http.StatusUnprocessableEntity, "invalid_source", err.Error())
+		return
+	}
+
 	if err := q.StartImageJob(r.Context(), jobID); err != nil {
 		a.error(w, http.StatusInternalServerError, "internal", "failed to start job")
 		return
@@ -415,7 +425,7 @@ func (a *App) ImagesGenerate(w http.ResponseWriter, r *http.Request) {
 			defer a.releaseImageSlot()
 			ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 			defer cancel()
-			url, err := a.ImageEditor.EditOnce(ctx, sourceURL, instruction, req.Prompt.Watermark.Enabled, negative, nil)
+			url, err := a.ImageEditor.EditOnce(ctx, source, instruction, req.Prompt.Watermark.Enabled, negative, nil)
 			results[idx] = struct {
 				url string
 				err error
@@ -697,6 +707,8 @@ func extractImageURLs(raw []byte) []string {
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 	urls := make([]string, 0, len(payload.Images))
 	for _, item := range payload.Images {
@@ -705,6 +717,57 @@ func extractImageURLs(raw []byte) []string {
 		}
 	}
 	return urls
+}
+
+func (a *App) prepareSourceImage(ctx context.Context, rawURL string, parsed *url.URL, assetID string, allowlisted bool) (imagegen.SourceImage, error) {
+	src := imagegen.SourceImage{URL: rawURL}
+	baseName := strings.TrimSpace(path.Base(parsed.Path))
+	if baseName != "" && baseName != "." && baseName != "/" {
+		src.Name = baseName
+	} else {
+		src.Name = strings.TrimSpace(assetID)
+	}
+	if allowlisted {
+		data, mimeType, err := a.fetchAllowlistedSource(ctx, rawURL)
+		if err != nil {
+			return imagegen.SourceImage{}, err
+		}
+		src.Data = data
+		src.MIMEType = mimeType
+	}
+	return src, nil
+}
+
+func (a *App) fetchAllowlistedSource(ctx context.Context, rawURL string) ([]byte, string, error) {
+	client := a.sourceFetcher
+	if client == nil {
+		client = http.DefaultClient
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create request for source asset: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to fetch source asset: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, "", fmt.Errorf("failed to fetch source asset: http %d", resp.StatusCode)
+	}
+	const maxSourceBytes = 20 << 20
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxSourceBytes+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read source asset: %w", err)
+	}
+	if len(data) > maxSourceBytes {
+		return nil, "", errors.New("source asset exceeds 20MB limit")
+	}
+	mimeType := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	if idx := strings.Index(mimeType, ";"); idx >= 0 {
+		mimeType = strings.TrimSpace(mimeType[:idx])
+	}
+	return data, mimeType, nil
 }
 
 func ensurePublicHTTPURL(u *url.URL, allowlist map[string]struct{}) error {

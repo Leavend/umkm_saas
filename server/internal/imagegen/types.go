@@ -2,6 +2,13 @@ package imagegen
 
 import "context"
 
+type SourceImage struct {
+	URL      string
+	Data     []byte
+	MIMEType string
+	Name     string
+}
+
 type GenerateRequest struct {
 	Provider    string `json:"provider"`
 	Quantity    int    `json:"quantity"`
@@ -37,5 +44,5 @@ type GenerateResponse struct {
 }
 
 type Editor interface {
-	EditOnce(ctx context.Context, imageURL, instruction string, watermark bool, negative string, seed *int) (string, error)
+	EditOnce(ctx context.Context, source SourceImage, instruction string, watermark bool, negative string, seed *int) (string, error)
 }
