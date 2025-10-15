@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -13,32 +15,38 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"os"
+	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"server/internal/db"
 	"server/internal/domain/jsoncfg"
-	"server/internal/middleware"
+	"server/internal/imagegen"
 	"server/internal/sqlinline"
-	"server/pkg/zip"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 const maxUploadBytes = 12 << 20
 
-type imageGenerateRequest struct {
-	Provider    string             `json:"provider"`
-	Quantity    int                `json:"quantity"`
-	AspectRatio string             `json:"aspect_ratio"`
-	Prompt      jsoncfg.PromptJSON `json:"prompt"`
-}
-
-type jobResponse struct {
-	JobID          string `json:"job_id"`
-	Status         string `json:"status"`
-	RemainingQuota int    `json:"remaining_quota"`
+type imageJobResponse struct {
+	ID          string          `json:"id"`
+	UserID      string          `json:"user_id,omitempty"`
+	Provider    string          `json:"provider"`
+	Model       string          `json:"model"`
+	Status      string          `json:"status"`
+	Quantity    int32           `json:"quantity"`
+	AspectRatio *string         `json:"aspect_ratio,omitempty"`
+	Prompt      json.RawMessage `json:"prompt"`
+	SourceAsset json.RawMessage `json:"source_asset"`
+	Output      json.RawMessage `json:"output,omitempty"`
+	Error       *string         `json:"error,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 func (a *App) ImagesUpload(w http.ResponseWriter, r *http.Request) {
@@ -300,214 +308,396 @@ func (a *App) ImagesGenerate(w http.ResponseWriter, r *http.Request) {
 		a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
 		return
 	}
-	var req imageGenerateRequest
+	if a.ImageEditor == nil {
+		a.error(w, http.StatusServiceUnavailable, "unavailable", "image editor unavailable")
+		return
+	}
+
+	var req imagegen.GenerateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		a.error(w, http.StatusBadRequest, "bad_request", "invalid payload")
 		return
 	}
-	locale := middleware.LocaleFromContext(r.Context())
-	req.Prompt.Normalize(locale)
-	if req.Quantity <= 0 {
-		req.Quantity = req.Prompt.Quantity
-		if req.Quantity <= 0 {
-			req.Quantity = jsoncfg.DefaultPromptQuantity
-		}
+
+	provider := strings.TrimSpace(strings.ToLower(req.Provider))
+	if provider == "" || provider == "qwen-image-plus" {
+		provider = "qwen-image-edit"
 	}
-	if req.Quantity > jsoncfg.MaxPromptQuantity {
-		req.Quantity = jsoncfg.MaxPromptQuantity
-	}
-	req.Prompt.Quantity = req.Quantity
-	if req.AspectRatio == "" {
-		req.AspectRatio = req.Prompt.AspectRatio
-		if req.AspectRatio == "" {
-			req.AspectRatio = jsoncfg.DefaultPromptAspectRatio
-		}
-	}
-	provider := req.Provider
-	if provider == "" {
-		provider = "qwen-image-plus"
-	}
-	if _, ok := a.ImageProviders[provider]; !ok {
+	if provider != "qwen-image-edit" {
 		a.error(w, http.StatusBadRequest, "bad_request", "unsupported provider")
 		return
 	}
-	promptBytes, _ := json.Marshal(req.Prompt)
-	row := a.SQL.QueryRow(r.Context(), sqlinline.QEnqueueImageJob, userID, promptBytes, req.Quantity, req.AspectRatio, provider)
-	var jobID string
-	var remaining int
-	if err := row.Scan(&jobID, &remaining); err != nil {
-		if strings.Contains(err.Error(), "quota exceeded") {
-			a.error(w, http.StatusForbidden, "quota_exceeded", "daily quota exceeded")
+
+	sourceURL := strings.TrimSpace(req.Prompt.SourceAsset.URL)
+	parsedURL, err := url.Parse(sourceURL)
+	if err != nil || parsedURL == nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		a.error(w, http.StatusUnprocessableEntity, "invalid_source", "prompt.source_asset.url must be a public http(s) URL")
+		return
+	}
+
+	quantity := req.Quantity
+	if quantity <= 0 {
+		quantity = 1
+	}
+	if quantity > 8 {
+		quantity = 8
+	}
+
+	q := db.New(a.DB)
+
+	promptJSON, err := json.Marshal(req.Prompt)
+	if err != nil {
+		a.error(w, http.StatusBadRequest, "bad_request", "failed to encode prompt")
+		return
+	}
+	sourceJSON, err := json.Marshal(req.Prompt.SourceAsset)
+	if err != nil {
+		a.error(w, http.StatusBadRequest, "bad_request", "failed to encode source asset")
+		return
+	}
+
+	var aspectPtr *string
+	aspect := strings.TrimSpace(req.AspectRatio)
+	if aspect != "" {
+		aspectPtr = &aspect
+	}
+	var userPtr *string
+	if userID != "" {
+		userPtr = &userID
+	}
+
+	jobID, err := q.CreateImageJob(r.Context(), db.CreateImageJobParams{
+		UserID:      userPtr,
+		Provider:    provider,
+		Model:       "qwen-image-edit",
+		Quantity:    int32(quantity),
+		AspectRatio: aspectPtr,
+		Prompt:      promptJSON,
+		SourceAsset: sourceJSON,
+	})
+	if err != nil {
+		a.error(w, http.StatusInternalServerError, "internal", "failed to create job")
+		return
+	}
+
+	if err := q.StartImageJob(r.Context(), jobID); err != nil {
+		a.error(w, http.StatusInternalServerError, "internal", "failed to start job")
+		return
+	}
+
+	instruction := imagegen.BuildInstruction(req)
+	negative := ""
+	if req.Prompt.Extras != nil {
+		if v, ok := req.Prompt.Extras["negative_prompt"].(string); ok {
+			negative = v
+		}
+	}
+
+	results := make([]struct {
+		url string
+		err error
+	}, quantity)
+	var wg sync.WaitGroup
+	for i := 0; i < quantity; i++ {
+		idx := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := a.acquireImageSlot(r.Context()); err != nil {
+				results[idx].err = err
+				return
+			}
+			defer a.releaseImageSlot()
+			ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+			defer cancel()
+			url, err := a.ImageEditor.EditOnce(ctx, sourceURL, instruction, req.Prompt.Watermark.Enabled, negative, nil)
+			results[idx] = struct {
+				url string
+				err error
+			}{url: url, err: err}
+		}()
+	}
+	wg.Wait()
+
+	var urls []string
+	for _, res := range results {
+		if res.err != nil {
+			_ = q.FailImageJob(r.Context(), db.FailImageJobParams{ID: jobID, Error: res.err.Error()})
+			a.error(w, http.StatusBadGateway, "generation_failed", res.err.Error())
 			return
 		}
-		a.error(w, http.StatusInternalServerError, "internal", "failed to queue job")
-		return
+		urls = append(urls, res.url)
 	}
-	a.json(w, http.StatusAccepted, jobResponse{JobID: jobID, Status: "QUEUED", RemainingQuota: remaining})
-}
 
-func (a *App) ImageStatus(w http.ResponseWriter, r *http.Request) {
-	userID := a.currentUserID(r)
-	if userID == "" {
-		a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
-		return
+	outputPayload := map[string]any{
+		"images": func() []map[string]string {
+			items := make([]map[string]string, 0, len(urls))
+			for _, u := range urls {
+				items = append(items, map[string]string{"url": u})
+			}
+			return items
+		}(),
 	}
-	jobID := chi.URLParam(r, "job_id")
-	if jobID == "" {
-		a.error(w, http.StatusBadRequest, "bad_request", "job_id required")
-		return
-	}
-	job, err := a.loadJobForUser(r.Context(), jobID, userID)
+	outputJSON, err := json.Marshal(outputPayload)
 	if err != nil {
-		a.error(w, http.StatusNotFound, "not_found", "job not found")
+		_ = q.FailImageJob(r.Context(), db.FailImageJobParams{ID: jobID, Error: err.Error()})
+		a.error(w, http.StatusInternalServerError, "internal", "failed to encode output")
 		return
 	}
-	a.json(w, http.StatusOK, map[string]any{
-		"id":           job.ID,
-		"user_id":      job.UserID,
-		"task_type":    job.TaskType,
-		"status":       job.Status,
-		"provider":     job.Provider,
-		"quantity":     job.Quantity,
-		"aspect_ratio": job.Aspect,
-		"created_at":   job.CreatedAt,
-		"updated_at":   job.UpdatedAt,
-		"properties":   json.RawMessage(job.Properties),
+
+	if err := q.CompleteImageJob(r.Context(), db.CompleteImageJobParams{ID: jobID, Output: outputJSON}); err != nil {
+		a.error(w, http.StatusInternalServerError, "internal", "failed to persist output")
+		return
+	}
+
+	a.json(w, http.StatusCreated, imagegen.GenerateResponse{
+		JobID:  jobID.String(),
+		Status: "SUCCEEDED",
+		Images: urls,
 	})
 }
 
-func (a *App) ImageAssets(w http.ResponseWriter, r *http.Request) {
+func (a *App) ImageJob(w http.ResponseWriter, r *http.Request) {
 	userID := a.currentUserID(r)
 	if userID == "" {
 		a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
 		return
 	}
-	jobID := chi.URLParam(r, "job_id")
-	if jobID == "" {
-		a.error(w, http.StatusBadRequest, "bad_request", "job_id required")
+	idStr := chi.URLParam(r, "id")
+	if idStr == "" {
+		a.error(w, http.StatusBadRequest, "bad_request", "job id required")
 		return
 	}
-	if _, err := a.loadJobForUser(r.Context(), jobID, userID); err != nil {
+	jobID, err := uuid.Parse(idStr)
+	if err != nil {
+		a.error(w, http.StatusBadRequest, "bad_request", "invalid job id")
+		return
+	}
+	q := db.New(a.DB)
+	job, err := q.GetImageJob(r.Context(), jobID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			a.error(w, http.StatusNotFound, "not_found", "job not found")
+			return
+		}
+		a.error(w, http.StatusInternalServerError, "internal", "failed to load job")
+		return
+	}
+	if job.UserID.Valid && job.UserID.String != userID {
 		a.error(w, http.StatusNotFound, "not_found", "job not found")
 		return
 	}
-	rows, err := a.SQL.Query(r.Context(), sqlinline.QSelectJobAssets, jobID, userID)
-	if err != nil {
-		a.error(w, http.StatusInternalServerError, "internal", "failed to load assets")
-		return
+
+	var aspectPtr *string
+	if job.AspectRatio.Valid {
+		v := job.AspectRatio.String
+		aspectPtr = &v
 	}
-	defer rows.Close()
-	var items []map[string]any
-	for rows.Next() {
-		var id, storageKey, mime string
-		var bytes int64
-		var width, height int
-		var aspect string
-		var props []byte
-		var createdAt time.Time
-		if err := rows.Scan(&id, &storageKey, &mime, &bytes, &width, &height, &aspect, &props, &createdAt); err != nil {
-			continue
-		}
-		items = append(items, map[string]any{
-			"id":           id,
-			"storage_key":  storageKey,
-			"mime":         mime,
-			"bytes":        bytes,
-			"width":        width,
-			"height":       height,
-			"aspect_ratio": aspect,
-			"properties":   json.RawMessage(props),
-			"created_at":   createdAt,
-		})
+	var errPtr *string
+	if job.Error.Valid && job.Error.String != "" {
+		v := job.Error.String
+		errPtr = &v
 	}
-	a.json(w, http.StatusOK, map[string]any{"items": items})
+	userVal := ""
+	if job.UserID.Valid {
+		userVal = job.UserID.String
+	}
+	resp := imageJobResponse{
+		ID:          job.ID.String(),
+		UserID:      userVal,
+		Provider:    job.Provider,
+		Model:       job.Model,
+		Status:      job.Status,
+		Quantity:    job.Quantity,
+		AspectRatio: aspectPtr,
+		Prompt:      json.RawMessage(job.Prompt),
+		SourceAsset: json.RawMessage(job.SourceAsset),
+		CreatedAt:   job.CreatedAt,
+		UpdatedAt:   job.UpdatedAt,
+	}
+	if len(job.Output) > 0 {
+		resp.Output = json.RawMessage(job.Output)
+	}
+	resp.Error = errPtr
+
+	a.json(w, http.StatusOK, resp)
 }
 
-func (a *App) ImageZip(w http.ResponseWriter, r *http.Request) {
+func (a *App) ImageDownload(w http.ResponseWriter, r *http.Request) {
 	userID := a.currentUserID(r)
 	if userID == "" {
 		a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
 		return
 	}
-	jobID := chi.URLParam(r, "job_id")
-	if jobID == "" {
-		a.error(w, http.StatusBadRequest, "bad_request", "job_id required")
+	idStr := chi.URLParam(r, "job_id")
+	if idStr == "" {
+		a.error(w, http.StatusBadRequest, "bad_request", "job id required")
 		return
 	}
-	if _, err := a.loadJobForUser(r.Context(), jobID, userID); err != nil {
+	jobID, err := uuid.Parse(idStr)
+	if err != nil {
+		a.error(w, http.StatusBadRequest, "bad_request", "invalid job id")
+		return
+	}
+	q := db.New(a.DB)
+	job, err := q.GetImageJob(r.Context(), jobID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			a.error(w, http.StatusNotFound, "not_found", "job not found")
+			return
+		}
+		a.error(w, http.StatusInternalServerError, "internal", "failed to load job")
+		return
+	}
+	if job.UserID.Valid && job.UserID.String != userID {
 		a.error(w, http.StatusNotFound, "not_found", "job not found")
 		return
 	}
-	rows, err := a.SQL.Query(r.Context(), sqlinline.QSelectJobAssets, jobID, userID)
-	if err != nil {
-		a.error(w, http.StatusInternalServerError, "internal", "failed to fetch assets")
+	if job.Status != "SUCCEEDED" || len(job.Output) == 0 {
+		a.error(w, http.StatusConflict, "job_pending", "job has not completed")
 		return
 	}
-	defer rows.Close()
-	var assets []zip.Asset
-	for rows.Next() {
-		var id, storageKey, mime string
-		var bytes int64
-		var width, height int
-		var aspect string
-		var props []byte
-		var createdAt time.Time
-		if err := rows.Scan(&id, &storageKey, &mime, &bytes, &width, &height, &aspect, &props, &createdAt); err != nil {
-			continue
-		}
-		data := loadAssetData(a.Config.StoragePath, storageKey)
-		assets = append(assets, zip.Asset{Filename: fmt.Sprintf("%s-%s", jobID, id), MIME: mime, Data: data})
+	urls := extractImageURLs(job.Output)
+	if len(urls) == 0 {
+		a.error(w, http.StatusNotFound, "no_image", "no image available")
+		return
 	}
-	archive := zip.ArchiveAssets(assets)
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=job-%s.zip", jobID))
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, urls[0], nil)
+	if err != nil {
+		a.error(w, http.StatusBadGateway, "download_error", err.Error())
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		a.error(w, http.StatusBadGateway, "download_error", err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusBadRequest {
+		a.error(w, http.StatusBadGateway, "download_error", fmt.Sprintf("remote status %d", resp.StatusCode))
+		return
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "image/png"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=job-%s.png", job.ID.String()))
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(archive)
+	_, _ = io.Copy(w, resp.Body)
 }
 
-func loadAssetData(basePath, storageKey string) []byte {
-	storageKey = strings.TrimSpace(storageKey)
-	if storageKey == "" {
-		return nil
+func (a *App) ImageDownloadZip(w http.ResponseWriter, r *http.Request) {
+	userID := a.currentUserID(r)
+	if userID == "" {
+		a.error(w, http.StatusUnauthorized, "unauthorized", "missing user context")
+		return
 	}
-	lower := strings.ToLower(storageKey)
-	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "data:") {
-		return []byte(storageKey)
+	idStr := chi.URLParam(r, "job_id")
+	if idStr == "" {
+		a.error(w, http.StatusBadRequest, "bad_request", "job id required")
+		return
 	}
-	basePath = strings.TrimSpace(basePath)
-	if basePath == "" {
-		return nil
-	}
-	path := filepath.Join(basePath, filepath.FromSlash(strings.TrimLeft(storageKey, "/")))
-	data, err := os.ReadFile(path)
+	jobID, err := uuid.Parse(idStr)
 	if err != nil {
+		a.error(w, http.StatusBadRequest, "bad_request", "invalid job id")
+		return
+	}
+	q := db.New(a.DB)
+	job, err := q.GetImageJob(r.Context(), jobID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			a.error(w, http.StatusNotFound, "not_found", "job not found")
+			return
+		}
+		a.error(w, http.StatusInternalServerError, "internal", "failed to load job")
+		return
+	}
+	if job.UserID.Valid && job.UserID.String != userID {
+		a.error(w, http.StatusNotFound, "not_found", "job not found")
+		return
+	}
+
+	urls := extractImageURLs(job.Output)
+	if len(urls) == 0 {
+		a.error(w, http.StatusNotFound, "no_image", "no image available")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=job-%s.zip", job.ID.String()))
+
+	zipWriter := zip.NewWriter(w)
+	defer zipWriter.Close()
+
+	for idx, imgURL := range urls {
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, imgURL, nil)
+		if err != nil {
+			continue
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			continue
+		}
+		if resp.StatusCode >= http.StatusBadRequest {
+			resp.Body.Close()
+			continue
+		}
+		filename := fmt.Sprintf("image_%02d.png", idx+1)
+		if ct := resp.Header.Get("Content-Type"); strings.Contains(ct, "jpeg") {
+			filename = fmt.Sprintf("image_%02d.jpg", idx+1)
+		}
+		writer, err := zipWriter.Create(filename)
+		if err != nil {
+			resp.Body.Close()
+			continue
+		}
+		_, _ = io.Copy(writer, resp.Body)
+		resp.Body.Close()
+	}
+}
+
+func (a *App) acquireImageSlot(ctx context.Context) error {
+	if a.imageLimiter == nil {
 		return nil
 	}
-	return data
-}
-
-func (a *App) ImagesEnhance(w http.ResponseWriter, r *http.Request) {
-	a.ImagesGenerate(w, r)
-}
-
-type jobRecord struct {
-	ID         string
-	UserID     string
-	TaskType   string
-	Status     string
-	Provider   string
-	Quantity   int
-	Aspect     string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-	Properties []byte
-}
-
-func (a *App) loadJobForUser(ctx context.Context, jobID, userID string) (*jobRecord, error) {
-	row := a.SQL.QueryRow(ctx, sqlinline.QSelectJobStatus, jobID, userID)
-	var job jobRecord
-	if err := row.Scan(&job.ID, &job.UserID, &job.TaskType, &job.Status, &job.Provider, &job.Quantity, &job.Aspect, &job.CreatedAt, &job.UpdatedAt, &job.Properties); err != nil {
-		return nil, err
+	select {
+	case a.imageLimiter <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	return &job, nil
+}
+
+func (a *App) releaseImageSlot() {
+	if a.imageLimiter == nil {
+		return
+	}
+	select {
+	case <-a.imageLimiter:
+	default:
+	}
+}
+
+func extractImageURLs(raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload struct {
+		Images []struct {
+			URL string `json:"url"`
+		} `json:"images"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	urls := make([]string, 0, len(payload.Images))
+	for _, item := range payload.Images {
+		if u := strings.TrimSpace(item.URL); u != "" {
+			urls = append(urls, u)
+		}
+	}
+	return urls
 }
