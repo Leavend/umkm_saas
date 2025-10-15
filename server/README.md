@@ -11,6 +11,7 @@ Backend service for "Food Photography Naik Kelas" that exposes REST API with inl
 ```bash
 cp .env.example .env
 # edit DATABASE_URL, JWT_SECRET, GOOGLE_CLIENT_ID, GOOGLE_ISSUER, STORAGE_BASE_URL, STORAGE_PATH
+# optional: IMAGE_SOURCE_HOST_ALLOWLIST=cdn.example.com,localhost (defaults to STORAGE_BASE_URL host)
 # download Go modules (requires internet access)
 go mod tidy
 # prepare database schema

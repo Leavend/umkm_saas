@@ -2,44 +2,58 @@ package infra
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
 // Config represents application configuration loaded from environment variables.
 type Config struct {
-	AppEnv           string
-	Port             string
-	DatabaseURL      string
-	JWTSecret        string
-	StorageBaseURL   string
-	StoragePath      string
-	GeoIPDBPath      string
-	GoogleClientID   string
-	GoogleIssuer     string
-	PromptProvider   string
-	QwenAPIKey       string
-	QwenModel        string
-	QwenBaseURL      string
-	QwenDefaultSize  string
-	GeminiAPIKey     string
-	GeminiModel      string
-	GeminiBaseURL    string
-	OpenAIAPIKey     string
-	OpenAIModel      string
-	OpenAIBaseURL    string
-	OpenAIOrg        string
-	HTTPReadTimeout  time.Duration
-	HTTPWriteTimeout time.Duration
-	HTTPIdleTimeout  time.Duration
-	RateLimitPerMin  int
+	AppEnv               string
+	Port                 string
+	DatabaseURL          string
+	JWTSecret            string
+	StorageBaseURL       string
+	StoragePath          string
+	GeoIPDBPath          string
+	GoogleClientID       string
+	GoogleIssuer         string
+	PromptProvider       string
+	QwenAPIKey           string
+	QwenModel            string
+	QwenBaseURL          string
+	QwenDefaultSize      string
+	GeminiAPIKey         string
+	GeminiModel          string
+	GeminiBaseURL        string
+	OpenAIAPIKey         string
+	OpenAIModel          string
+	OpenAIBaseURL        string
+	OpenAIOrg            string
+	ImageSourceAllowlist []string
+	HTTPReadTimeout      time.Duration
+	HTTPWriteTimeout     time.Duration
+	HTTPIdleTimeout      time.Duration
+	RateLimitPerMin      int
 }
 
 // LoadConfig loads configuration from environment variables and applies defaults where needed.
 func LoadConfig() (*Config, error) {
 	port := getEnv("PORT", "8080")
 	storageBaseDefault := fmt.Sprintf("http://localhost:%s/static", port)
+
+	allowlistHosts := make(map[string]struct{})
+	if rawAllowlist := strings.TrimSpace(os.Getenv("IMAGE_SOURCE_HOST_ALLOWLIST")); rawAllowlist != "" {
+		for _, host := range strings.Split(rawAllowlist, ",") {
+			normalized := strings.ToLower(strings.TrimSpace(host))
+			if normalized != "" {
+				allowlistHosts[normalized] = struct{}{}
+			}
+		}
+	}
 
 	cfg := &Config{
 		AppEnv:           getEnv("APP_ENV", "development"),
@@ -67,6 +81,20 @@ func LoadConfig() (*Config, error) {
 		HTTPWriteTimeout: time.Second * time.Duration(getEnvInt("HTTP_WRITE_TIMEOUT_SECONDS", 30)),
 		HTTPIdleTimeout:  time.Second * time.Duration(getEnvInt("HTTP_IDLE_TIMEOUT_SECONDS", 60)),
 		RateLimitPerMin:  getEnvInt("RATE_LIMIT_PER_MINUTE", 30),
+	}
+
+	if parsedBase, err := url.Parse(cfg.StorageBaseURL); err == nil && parsedBase != nil {
+		if host := strings.ToLower(strings.TrimSpace(parsedBase.Hostname())); host != "" {
+			allowlistHosts[host] = struct{}{}
+		}
+	}
+
+	if len(allowlistHosts) > 0 {
+		cfg.ImageSourceAllowlist = make([]string, 0, len(allowlistHosts))
+		for host := range allowlistHosts {
+			cfg.ImageSourceAllowlist = append(cfg.ImageSourceAllowlist, host)
+		}
+		sort.Strings(cfg.ImageSourceAllowlist)
 	}
 
 	if cfg.DatabaseURL == "" {

@@ -166,6 +166,7 @@ func TestImagesGenerateHandler(t *testing.T) {
 		wantStatus int
 		wantImages int
 		wantJob    string
+		allowlist  []string
 	}{{
 		name: "success",
 		editor: func() *stubEditor {
@@ -219,6 +220,24 @@ func TestImagesGenerateHandler(t *testing.T) {
 			},
 		},
 	}, {
+		name: "allowlisted local source",
+		editor: func() *stubEditor {
+			return &stubEditor{urls: []string{"https://example.com/one.png"}}
+		},
+		allowlist:  []string{"localhost"},
+		wantStatus: http.StatusCreated,
+		wantImages: 1,
+		wantJob:    "SUCCEEDED",
+		body: map[string]any{
+			"provider": "qwen-image-plus",
+			"quantity": 1,
+			"prompt": map[string]any{
+				"title":        "Sample",
+				"watermark":    map[string]any{"enabled": false},
+				"source_asset": map[string]any{"asset_id": "upl", "url": "http://localhost:1919/static/uploads/file.png"},
+			},
+		},
+	}, {
 		name:       "editor failure",
 		editor:     func() *stubEditor { return &stubEditor{err: errors.New("generation failed")} },
 		wantStatus: http.StatusBadGateway,
@@ -240,12 +259,21 @@ func TestImagesGenerateHandler(t *testing.T) {
 			dbStub := newStubDB()
 			editor := tc.editor()
 
+			allowlist := make(map[string]struct{})
+			for _, host := range tc.allowlist {
+				normalized := strings.ToLower(strings.TrimSpace(host))
+				if normalized != "" {
+					allowlist[normalized] = struct{}{}
+				}
+			}
+
 			app := &App{
-				Config:       &infra.Config{},
-				Logger:       zerolog.Nop(),
-				DB:           dbStub,
-				ImageEditor:  editor,
-				imageLimiter: make(chan struct{}, 2),
+				Config:              &infra.Config{},
+				Logger:              zerolog.Nop(),
+				DB:                  dbStub,
+				ImageEditor:         editor,
+				imageLimiter:        make(chan struct{}, 2),
+				sourceHostAllowlist: allowlist,
 			}
 
 			bodyBytes, err := json.Marshal(tc.body)

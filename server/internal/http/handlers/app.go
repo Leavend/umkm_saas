@@ -26,19 +26,20 @@ import (
 )
 
 type App struct {
-	Config         *infra.Config
-	Logger         zerolog.Logger
-	DB             db.DBTX
-	SQL            infra.SQLExecutor
-	GeoIPResolver  geoip.CountryResolver
-	GoogleVerifier *googleauth.Verifier
-	PromptEnhancer prompt.Enhancer
-	ImageProviders map[string]image.Generator
-	VideoProviders map[string]video.Generator
-	JWTSecret      string
-	FileStore      *storage.FileStore
-	ImageEditor    imagegen.Editor
-	imageLimiter   chan struct{}
+	Config              *infra.Config
+	Logger              zerolog.Logger
+	DB                  db.DBTX
+	SQL                 infra.SQLExecutor
+	GeoIPResolver       geoip.CountryResolver
+	GoogleVerifier      *googleauth.Verifier
+	PromptEnhancer      prompt.Enhancer
+	ImageProviders      map[string]image.Generator
+	VideoProviders      map[string]video.Generator
+	JWTSecret           string
+	FileStore           *storage.FileStore
+	ImageEditor         imagegen.Editor
+	imageLimiter        chan struct{}
+	sourceHostAllowlist map[string]struct{}
 }
 
 func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
@@ -222,6 +223,13 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 		HTTPClient: &http.Client{Timeout: 60 * time.Second},
 	})
 
+	allowedHosts := make(map[string]struct{})
+	for _, host := range cfg.ImageSourceAllowlist {
+		if normalized := strings.ToLower(strings.TrimSpace(host)); normalized != "" {
+			allowedHosts[normalized] = struct{}{}
+		}
+	}
+
 	return &App{
 		Config:         cfg,
 		Logger:         logger,
@@ -237,10 +245,11 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 			"gemini-2.0-flash": geminiVideo,
 			"gemini-2.5-flash": geminiVideo,
 		},
-		JWTSecret:    cfg.JWTSecret,
-		FileStore:    fileStore,
-		ImageEditor:  imageEditor,
-		imageLimiter: make(chan struct{}, 2),
+		JWTSecret:           cfg.JWTSecret,
+		FileStore:           fileStore,
+		ImageEditor:         imageEditor,
+		imageLimiter:        make(chan struct{}, 2),
+		sourceHostAllowlist: allowedHosts,
 	}
 }
 
