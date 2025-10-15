@@ -730,10 +730,30 @@ func (a *App) prepareSourceImage(ctx context.Context, rawURL string, parsed *url
 		if err != nil {
 			return imagegen.SourceImage{}, err
 		}
+		sniff := mimeType
+		if sniff == "" && len(data) > 0 {
+			sniff = http.DetectContentType(data[:min(len(data), 512)])
+		}
+		width, height, normalized, dimErr := decodeImageDimensions(data, sniff)
+		if dimErr != nil {
+			return imagegen.SourceImage{}, errors.New("source asset is not a valid image")
+		}
+		if normalized != "" {
+			mimeType = normalized
+		}
 		src.Data = data
 		src.MIMEType = mimeType
+		src.Width = width
+		src.Height = height
 	}
 	return src, nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func (a *App) fetchAllowlistedSource(ctx context.Context, rawURL string) ([]byte, string, error) {

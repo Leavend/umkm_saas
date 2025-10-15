@@ -28,11 +28,11 @@ func TestQwenClientEditOnce(t *testing.T) {
 		if len(contents) != 2 {
 			t.Fatalf("unexpected content length: %d", len(contents))
 		}
-		if contents[0].Image == nil || contents[0].Image.URL != "https://example.com/in.png" {
-			t.Fatalf("image content mismatch: %+v", contents[0].Image)
-		}
-		if got := strings.TrimSpace(contents[1].Text); got != "do something" {
+		if got := strings.TrimSpace(contents[0].Text); got != "do something" {
 			t.Fatalf("instruction mismatch: %s", got)
+		}
+		if contents[1].Image == nil || contents[1].Image.URL != "https://example.com/in.png" {
+			t.Fatalf("image content mismatch: %+v", contents[1].Image)
 		}
 		resp := qwenResp{}
 		resp.Output.Choices = []struct {
@@ -85,16 +85,23 @@ func TestQwenClientUsesBytesPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EditOnce error: %v", err)
 	}
-	if len(captured.Input.Messages) == 0 || captured.Input.Messages[0].Content[0].Image == nil {
+	if len(captured.Input.Messages) == 0 || len(captured.Input.Messages[0].Content) < 2 {
 		t.Fatalf("image bytes not captured: %+v", captured)
 	}
-	if captured.Input.Messages[0].Content[0].Image.Data == "" {
+	img := captured.Input.Messages[0].Content[1].Image
+	if img == nil {
+		t.Fatalf("expected image content present")
+	}
+	if img.Data == "" {
 		t.Fatalf("expected base64 data in payload")
 	}
-	if captured.Input.Messages[0].Content[0].Image.MIMEType != "image/png" {
-		t.Fatalf("unexpected mime type: %s", captured.Input.Messages[0].Content[0].Image.MIMEType)
+	if img.MIMEType != "image/png" {
+		t.Fatalf("unexpected mime type: %s", img.MIMEType)
 	}
-	if captured.Input.Messages[0].Content[0].Image.Format != "png" {
-		t.Fatalf("unexpected format: %s", captured.Input.Messages[0].Content[0].Image.Format)
+	if img.Format != "png" {
+		t.Fatalf("unexpected format: %s", img.Format)
+	}
+	if img.Width != 0 || img.Height != 0 {
+		t.Fatalf("expected zero dimensions without metadata, got %dx%d", img.Width, img.Height)
 	}
 }

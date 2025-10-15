@@ -7,6 +7,8 @@ type SourceImage struct {
 	Data     []byte
 	MIMEType string
 	Name     string
+	Width    int
+	Height   int
 }
 
 type GenerateRequest struct {

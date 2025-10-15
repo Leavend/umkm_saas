@@ -101,6 +101,20 @@ func LoadConfig() (*Config, error) {
 		sort.Strings(cfg.ImageSourceAllowlist)
 	}
 
+	if parsedBase, err := url.Parse(cfg.StorageBaseURL); err == nil && parsedBase != nil {
+		if host := strings.ToLower(strings.TrimSpace(parsedBase.Hostname())); host != "" {
+			allowlistHosts[host] = struct{}{}
+		}
+	}
+
+	if len(allowlistHosts) > 0 {
+		cfg.ImageSourceAllowlist = make([]string, 0, len(allowlistHosts))
+		for host := range allowlistHosts {
+			cfg.ImageSourceAllowlist = append(cfg.ImageSourceAllowlist, host)
+		}
+		sort.Strings(cfg.ImageSourceAllowlist)
+	}
+
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL is required")
 	}

@@ -72,6 +72,8 @@ type qwenImage struct {
 	MIMEType string `json:"mime_type,omitempty"`
 	Format   string `json:"format,omitempty"`
 	Name     string `json:"name,omitempty"`
+	Width    int    `json:"width,omitempty"`
+	Height   int    `json:"height,omitempty"`
 }
 
 type qwenParameters struct {
@@ -105,10 +107,10 @@ func (c *QwenClient) EditOnce(ctx context.Context, source SourceImage, instructi
 		return "", err
 	}
 	msg := qwenMessage{Role: "user"}
+	msg.Content = append(msg.Content, qwenContent{Text: instruction})
 	if imageContent != nil {
 		msg.Content = append(msg.Content, qwenContent{Image: imageContent})
 	}
-	msg.Content = append(msg.Content, qwenContent{Text: instruction})
 	payload.Input.Messages = append(payload.Input.Messages, msg)
 	payload.Params.Watermark = watermark
 	if negative = strings.TrimSpace(negative); negative != "" {
@@ -170,6 +172,12 @@ func buildImageContent(source SourceImage) (*qwenImage, error) {
 	img := &qwenImage{}
 	if hasData {
 		img.Data = base64.StdEncoding.EncodeToString(source.Data)
+		if source.Width > 0 {
+			img.Width = source.Width
+		}
+		if source.Height > 0 {
+			img.Height = source.Height
+		}
 	} else {
 		img.URL = url
 	}
