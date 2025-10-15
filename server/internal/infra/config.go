@@ -38,6 +38,8 @@ type Config struct {
 	HTTPWriteTimeout     time.Duration
 	HTTPIdleTimeout      time.Duration
 	RateLimitPerMin      int
+	CertFile             string
+	KeyFile              string
 }
 
 // LoadConfig loads configuration from environment variables and applies defaults where needed.
@@ -81,6 +83,8 @@ func LoadConfig() (*Config, error) {
 		HTTPWriteTimeout: time.Second * time.Duration(getEnvInt("HTTP_WRITE_TIMEOUT_SECONDS", 30)),
 		HTTPIdleTimeout:  time.Second * time.Duration(getEnvInt("HTTP_IDLE_TIMEOUT_SECONDS", 60)),
 		RateLimitPerMin:  getEnvInt("RATE_LIMIT_PER_MINUTE", 30),
+		CertFile:         getEnv("HTTP_TLS_CERT_FILE", "./tls/localhost.pem"),
+		KeyFile:          getEnv("HTTP_TLS_KEY_FILE", "./tls/localhost-key.pem"),
 	}
 
 	if parsedBase, err := url.Parse(cfg.StorageBaseURL); err == nil && parsedBase != nil {
