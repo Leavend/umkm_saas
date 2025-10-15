@@ -2,41 +2,44 @@ package infra
 
 import (
 	"context"
+	"fmt"
 	"net/http"
-	"time"
 )
 
-// HTTPServer wraps http.Server to provide graceful startup and shutdown helpers.
-type HTTPServer struct {
-	server *http.Server
+// Server adalah wrapper untuk http.Server.
+type Server struct {
+	*http.Server
+	cfg *Config
 }
 
-// NewHTTPServer creates a configured HTTP server instance.
-func NewHTTPServer(cfg *Config, handler http.Handler) *HTTPServer {
-	srv := &http.Server{
-		Addr:              ":" + cfg.Port,
-		Handler:           handler,
-		ReadTimeout:       cfg.HTTPReadTimeout,
-		ReadHeaderTimeout: 5 * time.Second,
-		WriteTimeout:      cfg.HTTPWriteTimeout,
-		IdleTimeout:       cfg.HTTPIdleTimeout,
+// NewHTTPServer membuat instance Server baru.
+func NewHTTPServer(cfg *Config, handler http.Handler) *Server {
+	return &Server{
+		Server: &http.Server{
+			Addr:         fmt.Sprintf(":%s", cfg.Port),
+			Handler:      handler,
+			ReadTimeout:  cfg.HTTPReadTimeout,
+			WriteTimeout: cfg.HTTPWriteTimeout,
+			IdleTimeout:  cfg.HTTPIdleTimeout,
+		},
+		cfg: cfg,
 	}
-
-	return &HTTPServer{server: srv}
 }
 
-// Start runs the HTTP server in the current goroutine.
-func (s *HTTPServer) Start() error {
-	if s.server == nil {
-		return nil
+// Start menjalankan server.
+// Server akan berjalan dengan HTTPS jika CertFile dan KeyFile disediakan di config.
+// Jika tidak, server akan berjalan dengan HTTP biasa.
+func (s *Server) Start() error {
+	// Cek apakah konfigurasi TLS ada
+	if s.cfg.CertFile != "" && s.cfg.KeyFile != "" {
+		// Jalankan dengan HTTPS
+		return s.ListenAndServeTLS(s.cfg.CertFile, s.cfg.KeyFile)
 	}
-	return s.server.ListenAndServe()
+	// Jalankan dengan HTTP jika tidak ada konfigurasi TLS
+	return s.ListenAndServe()
 }
 
-// Shutdown gracefully stops the HTTP server.
-func (s *HTTPServer) Shutdown(ctx context.Context) error {
-	if s.server == nil {
-		return nil
-	}
-	return s.server.Shutdown(ctx)
+// Shutdown mematikan server dengan graceful shutdown.
+func (s *Server) Shutdown(ctx context.Context) error {
+	return s.Server.Shutdown(ctx)
 }
