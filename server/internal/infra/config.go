@@ -38,12 +38,15 @@ type Config struct {
 
 // LoadConfig loads configuration from environment variables and applies defaults where needed.
 func LoadConfig() (*Config, error) {
+	port := getEnv("PORT", "8080")
+	storageBaseDefault := fmt.Sprintf("http://localhost:%s/static", port)
+
 	cfg := &Config{
 		AppEnv:           getEnv("APP_ENV", "development"),
-		Port:             getEnv("PORT", "8080"),
+		Port:             port,
 		DatabaseURL:      os.Getenv("DATABASE_URL"),
 		JWTSecret:        os.Getenv("JWT_SECRET"),
-		StorageBaseURL:   getEnv("STORAGE_BASE_URL", "http://localhost:8080/static"),
+		StorageBaseURL:   getEnv("STORAGE_BASE_URL", storageBaseDefault),
 		StoragePath:      getEnv("STORAGE_PATH", "./storage"),
 		GeoIPDBPath:      os.Getenv("GEOIP_DB_PATH"),
 		GoogleClientID:   os.Getenv("GOOGLE_CLIENT_ID"),
