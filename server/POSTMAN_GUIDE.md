@@ -94,7 +94,7 @@ Endpoint privat memerlukan JWT. Jika belum memiliki Google ID Token valid:
 ## 4. Menyiapkan Postman
 
 1. Buat **Environment** `UMKM SaaS` berisi:
-   - `base_url` = `http://localhost:8080/v1` (atau sesuaikan dengan `$PORT`).
+  - `base_url` = `http://localhost:${PORT:-8080}/v1` (sesuaikan dengan nilai `$PORT`).
    - `jwt_token` = token hasil langkah sebelumnya.
    - `upload_asset_id` = akan diisi dari respons `/images/uploads` jika Anda menguji workflow enhance.
    - `job_id` = kosong; akan diisi setelah enqueue job.
@@ -165,7 +165,7 @@ Endpoint privat memerlukan JWT. Jika belum memiliki Google ID Token valid:
   Gunakan form-data dengan key `file` (type File) dan opsional `mode`, `background_theme`, `enhance_level`.
 
   ```bash
-  curl -X POST "http://localhost:8080/v1/images/uploads" \
+  curl -X POST "http://localhost:${PORT:-8080}/v1/images/uploads" \
     -H "Authorization: Bearer $JWT" \
     -F "file=@/path/to/reference.png" \
     -F "mode=product" -F "background_theme=marble" -F "enhance_level=medium"
@@ -182,7 +182,7 @@ Endpoint privat memerlukan JWT. Jika belum memiliki Google ID Token valid:
     "width": 1024,
     "height": 1024,
     "aspect_ratio": "1:1",
-    "url": "http://localhost:8080/static/uploads/USER_ID/1709898888123456.png"
+    "url": "http://localhost:${PORT:-8080}/static/uploads/USER_ID/1709898888123456.png"
   }
   ```
 
