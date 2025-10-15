@@ -98,3 +98,10 @@ func UserIDFromContext(ctx context.Context) string {
 	}
 	return ""
 }
+
+func ContextWithUserID(ctx context.Context, userID string) context.Context {
+	if strings.TrimSpace(userID) == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, userIDKey, userID)
+}

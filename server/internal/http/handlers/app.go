@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"server/internal/db"
+	"server/internal/imagegen"
 	"server/internal/infra"
 	"server/internal/infra/credentials"
 	"server/internal/infra/geoip"
@@ -24,17 +26,25 @@ import (
 )
 
 type App struct {
-	Config         *infra.Config
-	Logger         zerolog.Logger
-	DB             *pgxpool.Pool
-	SQL            infra.SQLExecutor
-	GeoIPResolver  geoip.CountryResolver
-	GoogleVerifier *googleauth.Verifier
-	PromptEnhancer prompt.Enhancer
-	ImageProviders map[string]image.Generator
-	VideoProviders map[string]video.Generator
-	JWTSecret      string
-	FileStore      *storage.FileStore
+	Config              *infra.Config
+	Logger              zerolog.Logger
+	DB                  db.DBTX
+	SQL                 infra.SQLExecutor
+	GeoIPResolver       geoip.CountryResolver
+	GoogleVerifier      *googleauth.Verifier
+	PromptEnhancer      prompt.Enhancer
+	ImageProviders      map[string]image.Generator
+	VideoProviders      map[string]video.Generator
+	JWTSecret           string
+	FileStore           *storage.FileStore
+	ImageEditor         imagegen.Editor
+	imageLimiter        chan struct{}
+	sourceHostAllowlist map[string]struct{}
+	sourceFetcher       httpDoer
+}
+
+type httpDoer interface {
+	Do(req *http.Request) (*http.Response, error)
 }
 
 func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
@@ -212,6 +222,19 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 		"gemini-2.5-flash":                  geminiImage,
 	}
 
+	imageEditor := imagegen.NewQwenClient(imagegen.QwenOptions{
+		APIKey:     qwenKey,
+		BaseURL:    cfg.QwenBaseURL,
+		HTTPClient: &http.Client{Timeout: 60 * time.Second},
+	})
+
+	allowedHosts := make(map[string]struct{})
+	for _, host := range cfg.ImageSourceAllowlist {
+		if normalized := strings.ToLower(strings.TrimSpace(host)); normalized != "" {
+			allowedHosts[normalized] = struct{}{}
+		}
+	}
+
 	return &App{
 		Config:         cfg,
 		Logger:         logger,
@@ -227,8 +250,12 @@ func NewApp(cfg *infra.Config, pool *pgxpool.Pool, logger zerolog.Logger) *App {
 			"gemini-2.0-flash": geminiVideo,
 			"gemini-2.5-flash": geminiVideo,
 		},
-		JWTSecret: cfg.JWTSecret,
-		FileStore: fileStore,
+		JWTSecret:           cfg.JWTSecret,
+		FileStore:           fileStore,
+		ImageEditor:         imageEditor,
+		imageLimiter:        make(chan struct{}, 2),
+		sourceHostAllowlist: allowedHosts,
+		sourceFetcher:       &http.Client{Timeout: 20 * time.Second},
 	}
 }
 

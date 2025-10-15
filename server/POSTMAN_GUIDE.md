@@ -4,14 +4,14 @@ Panduan ini membantu menyiapkan lingkungan lokal, membuat token JWT untuk akun p
 
 ## 1. Ringkasan Progres Layanan
 
-- **Autentikasi Google & profil pengguna**: backend dapat memverifikasi Google ID Token, melakukan upsert user, menandatangani JWT, dan mengekspos profil lewat `/v1/me` dengan kuota harian dari kolom JSONB.【F:server/internal/http/httpapi/router.go†L33-L45】【F:server/internal/http/handlers/auth.go†L32-L166】【F:server/internal/sqlinline/users.go†L1-L120】
-- **Manajemen prompt**: endpoint `/v1/prompts/*` melakukan normalisasi input, memanggil enhancer (Gemini/OpenAI/static), dan mencatat usage event ke tabel `usage_events`.【F:server/internal/http/httpapi/router.go†L41-L45】【F:server/internal/http/handlers/prompts.go†L27-L140】【F:server/internal/sqlinline/usage.go†L3-L5】
-- **Pipeline media**: pengguna dapat mengunggah aset referensi, enqueue generate/enhance image, melihat status & daftar aset, serta mengunduh ZIP hasil job; worker memanfaatkan provider Qwen/Gemini yang sudah dipetakan pada App.【F:server/internal/http/httpapi/router.go†L47-L54】【F:server/internal/http/handlers/images.go†L44-L466】【F:server/internal/http/handlers/app.go†L195-L232】
-- **Pipeline video**: enqueue, status, dan daftar aset video tersedia dan berbagi mekanisme validasi kepemilikan job dengan pipeline gambar.【F:server/internal/http/httpapi/router.go†L60-L64】【F:server/internal/http/handlers/videos.go†L20-L105】
-- **Inventaris aset & unduhan**: `/v1/assets` melakukan paginasi aset milik user, dan `/v1/assets/{id}/download` mengembalikan signed URL lokal yang dihasilkan dari konfigurasi storage path/base URL.【F:server/internal/http/httpapi/router.go†L66-L69】【F:server/internal/http/handlers/assets.go†L14-L85】【F:server/internal/http/handlers/app.go†L199-L265】
-- **Statistik publik & monetisasi**: `/v1/stats/summary` menarik data agregasi dari view `vw_stats_summary`, sementara `/v1/donations` dan `/v1/donations/testimonials` menyimpan serta menampilkan testimoni donasi.【F:server/internal/http/httpapi/router.go†L71-L73】【F:server/internal/http/handlers/stats.go†L9-L25】【F:server/internal/http/handlers/donations.go†L18-L74】【F:server/internal/sqlinline/stats.go†L3-L11】【F:server/internal/sqlinline/donations.go†L3-L13】
+- **Autentikasi Google & profil pengguna**: backend memverifikasi Google ID Token, melakukan upsert user, menandatangani JWT, lalu mengekspos profil lengkap dengan kuota harian dari kolom JSONB melalui `/v1/me`.【F:server/internal/http/httpapi/router.go†L33-L39】【F:server/internal/http/handlers/auth.go†L32-L125】【F:server/internal/sqlinline/users.go†L1-L120】
+- **Manajemen prompt**: rute `/v1/prompts/*` menormalisasi input, memanggil enhancer (Gemini/OpenAI/static), serta mencatat usage event ke tabel `usage_events` beserta metadata latensi.【F:server/internal/http/httpapi/router.go†L41-L45】【F:server/internal/http/handlers/prompts.go†L27-L140】【F:server/internal/sqlinline/usage.go†L3-L5】
+- **Pipeline gambar sinkron**: pengguna dapat mengunggah aset referensi, lalu memanggil `/v1/images/generate` yang selalu menggunakan DashScope `qwen-image-edit`, menyimpan jejak job ke tabel `image_jobs`, serta menyediakan status dan endpoint unduhan (single maupun ZIP) berbasis proxy.【F:server/internal/http/httpapi/router.go†L47-L53】【F:server/db/migrations/0007_create_image_jobs.sql†L1-L24】【F:server/internal/http/handlers/images.go†L305-L660】【F:server/internal/imagegen/instruction.go†L8-L42】
+- **Pipeline video**: enqueue, status, dan daftar aset video tetap tersedia dan berbagi mekanisme validasi kepemilikan job yang sama dengan pipeline gambar.【F:server/internal/http/httpapi/router.go†L59-L63】【F:server/internal/http/handlers/videos.go†L27-L138】
+- **Inventaris aset & unduhan**: `/v1/assets` melakukan paginasi aset milik user, sedangkan `/v1/assets/{id}/download` mengembalikan URL final (storage lokal atau absolut) setelah verifikasi kepemilikan.【F:server/internal/http/httpapi/router.go†L65-L68】【F:server/internal/http/handlers/assets.go†L14-L85】【F:server/internal/http/handlers/app.go†L200-L276】
+- **Statistik publik & monetisasi**: `/v1/stats/summary` menarik data agregasi, sementara `/v1/donations` dan `/v1/donations/testimonials` menyimpan serta menampilkan testimoni donasi terbaru.【F:server/internal/http/httpapi/router.go†L70-L72】【F:server/internal/http/handlers/stats.go†L9-L24】【F:server/internal/http/handlers/donations.go†L18-L74】【F:server/internal/sqlinline/stats.go†L3-L11】【F:server/internal/sqlinline/donations.go†L3-L13】
 
-> Catatan: router otomatis menyajikan statik `/static/*` ketika `STORAGE_PATH` disetel, sehingga hasil worker dapat diakses langsung melalui URL yang sama dengan respons assets.【F:server/internal/http/httpapi/router.go†L28-L31】【F:server/internal/http/handlers/app.go†L253-L265】
+> Catatan: router otomatis menyajikan statik `/static/*` ketika `STORAGE_PATH` disetel, sehingga hasil proxy atau salinan lokal dapat diakses melalui URL yang sama dengan respons assets.【F:server/internal/http/httpapi/router.go†L24-L31】【F:server/internal/http/handlers/app.go†L265-L276】
 
 ## 2. Prasyarat Lingkungan Lokal
 
@@ -20,7 +20,7 @@ Panduan ini membantu menyiapkan lingkungan lokal, membuat token JWT untuk akun p
 2. **Menyiapkan database & dependensi**
    - Jalankan PostgreSQL lokal dengan ekstensi `pgcrypto`, unduh modul Go, lalu eksekusi migrasi Goose melalui Makefile.【F:server/README.md†L5-L31】
 3. **Menjalankan layanan**
-   - Jalankan `make run` untuk API (port default mengikuti `$PORT`, bawaan `8080`) dan `make worker` agar job async berubah status menjadi `SUCCEEDED/FAILED`. Pastikan direktori storage dapat ditulisi agar endpoint upload/ZIP berjalan lancar.【F:server/README.md†L27-L70】【F:server/internal/infra/config.go†L43-L48】【F:server/internal/http/handlers/images.go†L44-L154】
+   - Jalankan `make run` untuk API (port default mengikuti `$PORT`, bawaan `8080`). Pipeline gambar bersifat sinkron, namun `make worker` tetap diperlukan jika Anda ingin menguji job video yang diproses async. Pastikan direktori storage dapat ditulisi agar endpoint upload dan unduhan berbasis proxy berjalan lancar.【F:server/README.md†L27-L74】【F:server/internal/infra/config.go†L43-L48】【F:server/internal/http/handlers/images.go†L44-L660】
 
 ## 3. Membuat Akun Pengujian & Token JWT
 
@@ -94,7 +94,7 @@ Endpoint privat memerlukan JWT. Jika belum memiliki Google ID Token valid:
 ## 4. Menyiapkan Postman
 
 1. Buat **Environment** `UMKM SaaS` berisi:
-   - `base_url` = `http://localhost:8080/v1` (atau sesuaikan dengan `$PORT`).
+  - `base_url` = `http://localhost:${PORT:-8080}/v1` (sesuaikan dengan nilai `$PORT`).
    - `jwt_token` = token hasil langkah sebelumnya.
    - `upload_asset_id` = akan diisi dari respons `/images/uploads` jika Anda menguji workflow enhance.
    - `job_id` = kosong; akan diisi setelah enqueue job.
@@ -120,11 +120,10 @@ Endpoint privat memerlukan JWT. Jika belum memiliki Google ID Token valid:
 | `{{base_url}}/prompts/random` | POST | Ya | Ambil kumpulan prompt acak per locale dan log provider yang dipakai.【F:server/internal/http/handlers/prompts.go†L89-L120】 |
 | `{{base_url}}/prompts/clear` | POST | Ya | Mencatat event pembersihan prompt; respon 204 tanpa body.【F:server/internal/http/handlers/auth.go†L158-L166】 |
 | `{{base_url}}/images/uploads` | POST | Ya (multipart) | Unggah gambar referensi (maks 12 MB, field `file`); backend memvalidasi format, menyimpan file ke `$STORAGE_PATH`, lalu menuliskan entri aset yang dapat direferensikan ulang.【F:server/internal/http/handlers/images.go†L44-L153】 |
-| `{{base_url}}/images/generate` | POST | Ya | Enqueue job gambar dengan validasi kuota & provider (default `qwen-image-plus`); payload dapat memuat `prompt.source_asset` berisi `asset_id` hasil upload agar worker memakai gambar tersebut.【F:server/internal/http/handlers/images.go†L297-L347】【F:server/cmd/worker/main.go†L258-L307】 |
-| `{{base_url}}/images/enhance` | POST | Ya | Alias ke `/images/generate` untuk skenario enhance prompt.<br>Gunakan payload yang sama.【F:server/internal/http/handlers/images.go†L489-L491】 |
-| `{{base_url}}/images/{{job_id}}/status` | GET | Ya | Lihat status job, provider, quantity, dan metadata lain.【F:server/internal/http/handlers/images.go†L349-L369】 |
-| `{{base_url}}/images/{{job_id}}/assets` | GET | Ya | Daftar aset (URL, dimensi, properties) milik job yang sama dan user terkait.【F:server/internal/http/handlers/images.go†L370-L424】 |
-| `{{base_url}}/images/{{job_id}}/zip` | POST | Ya | Mengarsipkan semua aset job menjadi ZIP dan mengirim sebagai attachment.【F:server/internal/http/handlers/images.go†L426-L466】 |
+| `{{base_url}}/images/generate` | POST | Ya | Mengedit gambar secara sinkron menggunakan DashScope `qwen-image-edit`, menyimpan log job ke Postgres, serta mengembalikan `job_id` dan URL hasil dalam respons yang sama. Pastikan host upload lokal ditambahkan ke `IMAGE_SOURCE_HOST_ALLOWLIST` bila ingin menggunakan URL `localhost`.【F:server/internal/http/handlers/images.go†L305-L457】【F:server/internal/infra/config.go†L41-L87】 |
+| `{{base_url}}/images/jobs/{{id}}` | GET | Ya | Mengambil status, payload prompt, dan output job yang tersimpan di tabel `image_jobs`.【F:server/internal/http/handlers/images.go†L460-L524】 |
+| `{{base_url}}/images/{{job_id}}/download` | GET | Ya | Proxy-download file pertama dari hasil job yang telah `SUCCEEDED`.【F:server/internal/http/handlers/images.go†L526-L590】 |
+| `{{base_url}}/images/{{job_id}}/download.zip` | GET | Ya | Mengunduh seluruh URL hasil job dalam bentuk arsip ZIP yang di-stream langsung dari DashScope.【F:server/internal/http/handlers/images.go†L592-L660】 |
 | `{{base_url}}/ideas/from-image` | POST | Ya | Validasi base64 image dan mengembalikan dua ide dummy untuk demo UX.【F:server/internal/http/handlers/ideas.go†L15-L35】 |
 | `{{base_url}}/videos/generate` | POST | Ya | Enqueue video job; pastikan provider salah satu kunci Gemini yang didukung App.【F:server/internal/http/handlers/videos.go†L20-L54】【F:server/internal/http/handlers/app.go†L215-L232】 |
 | `{{base_url}}/videos/{{job_id}}/status` | GET | Ya | Menggunakan handler status gambar untuk job video.【F:server/internal/http/handlers/videos.go†L56-L58】 |
@@ -166,13 +165,16 @@ Endpoint privat memerlukan JWT. Jika belum memiliki Google ID Token valid:
   Gunakan form-data dengan key `file` (type File) dan opsional `mode`, `background_theme`, `enhance_level`.
 
   ```bash
-  curl -X POST "http://localhost:8080/v1/images/uploads" \
+  curl -X POST "http://localhost:${PORT:-8080}/v1/images/uploads" \
     -H "Authorization: Bearer $JWT" \
     -F "file=@/path/to/reference.png" \
     -F "mode=product" -F "background_theme=marble" -F "enhance_level=medium"
   ```
 
 - **Contoh Respons Upload** — simpan `asset_id` dan `url` sebagai variabel Postman (`upload_asset_id`, `upload_asset_url`).
+- **Catatan penting**: URL yang dikembalikan perlu dapat diakses publik (bukan `localhost` atau jaringan privat) agar DashScope
+  dapat mengunduhnya saat proses edit. Pada lingkungan lokal, unggah file ke storage publik atau gunakan URL eksternal yang Anda
+  kontrol untuk pengujian endpoint generate.
 
   ```json
   {
@@ -183,11 +185,11 @@ Endpoint privat memerlukan JWT. Jika belum memiliki Google ID Token valid:
     "width": 1024,
     "height": 1024,
     "aspect_ratio": "1:1",
-    "url": "http://localhost:8080/static/uploads/USER_ID/1709898888123456.png"
+    "url": "http://localhost:${PORT:-8080}/static/uploads/USER_ID/1709898888123456.png"
   }
   ```
 
-- **Images Generate / Enhance**
+- **Images Generate (DashScope Edit)**
 
   ```json
   {
@@ -200,11 +202,7 @@ Endpoint privat memerlukan JWT. Jika belum memiliki Google ID Token valid:
       "style": "elegan",
       "background": "marble",
       "instructions": "Lighting lembut",
-      "watermark": {
-        "enabled": true,
-        "text": "Warung Nasgor Bapak",
-        "position": "bottom-right"
-      },
+      "watermark": { "enabled": false },
       "references": [],
       "source_asset": {
         "asset_id": "{{upload_asset_id}}",
@@ -212,31 +210,21 @@ Endpoint privat memerlukan JWT. Jika belum memiliki Google ID Token valid:
       },
       "extras": {
         "locale": "id",
-        "quality": "hd"
+        "quality": "hd",
+        "negative_prompt": "blurry"
       }
     }
   }
   ```
 
-## 7. Kenapa Upload & Generate Terpisah?
+## 7. Alur Uji Workflow Gambar
 
-Langkah uji keempat (`Images Upload` ➝ `Images Generate/Enhance` ➝ pantau status job) memang membutuhkan dua URL karena masing-masing menangani tanggung jawab berbeda:
+Workflow gambar kini sinkron dan mengembalikan URL hasil secara langsung, namun jejak job tetap tersimpan di database untuk audit dan unduhan berikutnya:
 
-- `/v1/images/uploads` menerima **multipart form-data** untuk file mentah, melakukan validasi ukuran/format, menulis file ke penyimpanan lokal (`$STORAGE_PATH`), lalu membuat entri aset beserta metadata yang bisa dibaca ulang.【F:server/internal/http/handlers/images.go†L44-L153】【F:server/internal/http/handlers/app.go†L253-L269】
-- `/v1/images/generate` hanya menerima **JSON prompt**. Worker akan membaca `prompt.source_asset.asset_id` bila disediakan, mengambil metadata/file dari tabel aset, dan baru meneruskan ke provider sehingga tidak perlu mengirim ulang file besar setiap kali generate.【F:server/internal/http/handlers/images.go†L297-L347】【F:server/cmd/worker/main.go†L258-L333】
-
-Alur ini memungkinkan satu upload dipakai oleh banyak job, menjaga request generate tetap ringan, dan memastikan worker punya hak akses terhadap file yang sudah diverifikasi kepemilikannya.
-
-Untuk menguji hingga status `SUCCEEDED`:
-
-1. Jalankan upload, simpan `asset_id` ke variabel `upload_asset_id`.
-2. Kirim generate/enhance dengan `prompt.source_asset.asset_id` tersebut.
-3. Pantau `{{base_url}}/images/{{job_id}}/status` sampai `status` menjadi `SUCCEEDED` (response awal dari enqueue berisi `job_id`).【F:server/internal/http/handlers/images.go†L349-L369】
-4. Pastikan file output tersimpan di folder storage (contoh `server/storage/...`) dan dapat diakses melalui:
-   - URL statik `http://localhost:8080/static/...` karena router otomatis mem-publish direktori storage,【F:server/internal/http/httpapi/router.go†L24-L31】
-   - Endpoint `{{base_url}}/assets` dan `{{base_url}}/assets/{id}/download` yang menarik metadata serta signed URL lokal.【F:server/internal/http/handlers/assets.go†L14-L85】
-
-Dengan mengikuti alur di atas, Anda bisa memverifikasi bahwa upload dipakai ulang sebagai payload generate sekaligus memvalidasi integrasi storage, worker, dan endpoint aset.
+1. Lakukan upload aset referensi, lalu simpan `asset_id` dan `url` yang dikembalikan Postman sebagai variabel lingkungan.【F:server/internal/http/handlers/images.go†L44-L153】
+2. Panggil `/v1/images/generate` menggunakan `prompt.source_asset` yang sama; backend otomatis memetakan provider kompatibel ke `qwen-image-edit`, membuat entri `image_jobs`, dan menjalankan maksimum dua permintaan paralel ke DashScope.【F:server/internal/http/handlers/images.go†L305-L457】
+3. Respons 201 sudah menyertakan `job_id` dan array `images`. Jika perlu metadata lengkap atau ingin mengunduh ulang setelah URL DashScope kedaluwarsa, akses `GET /v1/images/jobs/{id}` atau endpoint unduhan yang tersedia.【F:server/internal/http/handlers/images.go†L460-L660】
+4. Router tetap mengekspos folder storage lokal via `/static/*` apabila Anda menyimpan salinan manual; namun untuk permintaan default backend mem-proxy URL dari DashScope ketika klien memanggil endpoint download.【F:server/internal/http/httpapi/router.go†L24-L31】【F:server/internal/http/handlers/images.go†L526-L660】
 
 - **Videos Generate**
 
@@ -271,9 +259,9 @@ Dengan mengikuti alur di atas, Anda bisa memverifikasi bahwa upload dipakai ulan
 1. Jalankan request publik (`healthz`, `stats/summary`, `donations/testimonials`) untuk memastikan API dan koneksi database aktif.【F:server/internal/http/handlers/health.go†L7-L9】【F:server/internal/http/handlers/stats.go†L9-L25】【F:server/internal/http/handlers/donations.go†L42-L74】
 2. Pastikan JWT valid dengan memanggil `/v1/me`; cek kuota harian sesuai nilai yang diinsert pada langkah persiapan.【F:server/internal/http/handlers/auth.go†L101-L125】
 3. Uji seluruh grup **Prompts** dan verifikasi log usage di tabel `usage_events` untuk memastikan pipeline audit bekerja.【F:server/internal/http/handlers/prompts.go†L27-L140】【F:server/internal/sqlinline/usage.go†L3-L5】
-4. Jalankan **Images Upload** diikuti **Images Generate/Enhance**, kemudian pantau status job hingga `SUCCEEDED` sembari memastikan file tersimpan di `$STORAGE_PATH` dan dapat diakses via `/static/...` maupun endpoint assets.【F:server/internal/http/handlers/images.go†L44-L466】【F:server/internal/http/handlers/app.go†L253-L265】
-5. Setelah job sukses, gunakan `assets`, `download`, serta `zip` untuk memverifikasi akses file dan integritas metadata.【F:server/internal/http/handlers/assets.go†L14-L85】【F:server/internal/http/handlers/images.go†L426-L466】
-6. Uji **Videos Generate** untuk memastikan provider video siap serta worker memproses antrean yang sama.【F:server/internal/http/handlers/videos.go†L20-L105】
+4. Jalankan **Images Upload** lalu **Images Generate (DashScope Edit)** untuk memastikan respons sinkron berisi `job_id` dan URL hasil; lanjutkan dengan `GET /images/jobs/{id}` bila ingin memeriksa payload yang tersimpan.【F:server/internal/http/handlers/images.go†L44-L524】
+5. Gunakan endpoint `download` maupun `download.zip` guna memverifikasi alur proxy dari DashScope serta integritas metadata aset yang sama di `/v1/assets`.【F:server/internal/http/handlers/images.go†L526-L660】【F:server/internal/http/handlers/assets.go†L14-L85】【F:server/internal/http/handlers/app.go†L265-L276】
+6. Uji **Videos Generate** untuk memastikan provider video siap serta worker memproses antrean yang sama.【F:server/internal/http/handlers/videos.go†L27-L138】
 7. Terakhir, jalankan alur donasi dan pastikan data muncul di `/donations/testimonials` sebagai sanity check monetisasi.【F:server/internal/http/handlers/donations.go†L18-L74】
 
 Dengan alur di atas, seluruh permukaan API dapat divalidasi end-to-end memakai Postman tanpa ketergantungan kredensial produksi.

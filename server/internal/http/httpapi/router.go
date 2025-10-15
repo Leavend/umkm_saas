@@ -47,10 +47,9 @@ func NewRouter(app *handlers.App) http.Handler {
 		r.With(middleware.AuthJWT(app.JWTSecret)).Route("/images", func(r chi.Router) {
 			r.Post("/uploads", app.ImagesUpload)
 			r.Post("/generate", app.ImagesGenerate)
-			r.Post("/enhance", app.ImagesEnhance)
-			r.Get("/{job_id}/status", app.ImageStatus)
-			r.Get("/{job_id}/assets", app.ImageAssets)
-			r.Post("/{job_id}/zip", app.ImageZip)
+			r.Get("/jobs/{id}", app.ImageJob)
+			r.Get("/{job_id}/download", app.ImageDownload)
+			r.Get("/{job_id}/download.zip", app.ImageDownloadZip)
 		})
 
 		r.With(middleware.AuthJWT(app.JWTSecret)).Route("/ideas", func(r chi.Router) {
